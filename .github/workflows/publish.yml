@@ -1,0 +1,41 @@
+name: Publish
+
+# Publishes to npm whenever main carries a version the registry does not
+# have yet. No token is stored: the package trusts this repository and
+# workflow on npmjs.com (Package settings → Publishing access → Trusted
+# publisher), and npm accepts the workflow's OpenID Connect identity, with
+# provenance attached to the release.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      - name: Is this version already on npm?
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "mesharc@$VERSION" version >/dev/null 2>&1; then
+            echo "mesharc@$VERSION is already published"; echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publishing mesharc@$VERSION"; echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.check.outputs.publish == 'true'
+        run: npm publish
