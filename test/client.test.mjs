@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { inspect } from 'node:util';
 import { MeshArc, MeshArcError, MeshArcTimeoutError, VERSION } from '../dist/index.js';
 
 /** A fetch that answers from a script of responses and records what it was asked. */
@@ -31,6 +32,39 @@ test('the constructor needs a key and takes it from the environment', () => {
   process.env.MESHARC_API_KEY = 'mesharc_env';
   assert.ok(new MeshArc({ fetch: async () => new Response('{}') }));
   if (had === undefined) delete process.env.MESHARC_API_KEY; else process.env.MESHARC_API_KEY = had;
+});
+
+test('the key is not shown by console.log, inspect or JSON', () => {
+  const arc = new MeshArc('mesharc_live_abcdef1234567890', { fetch: async () => new Response('{}') });
+  const shown = inspect(arc);
+  assert.ok(!shown.includes('abcdef1234567890'), shown);
+  assert.ok(shown.includes('mesharc_…7890'), shown);
+  assert.ok(!Object.keys(arc).includes('key'));
+  assert.ok(!JSON.stringify({ base: arc.base, timeoutMs: arc.timeoutMs }).includes('abcdef'));
+});
+
+test('the base URL must be https, except on localhost', () => {
+  const f = async () => new Response('{}');
+  assert.throws(() => new MeshArc('mesharc_k', { fetch: f, baseUrl: 'http://evil.example' }), /https/);
+  assert.throws(() => new MeshArc('mesharc_k', { fetch: f, baseUrl: 'ftp://api.mesharc.dev' }), /https/);
+  assert.throws(() => new MeshArc('mesharc_k', { fetch: f, baseUrl: 'not a url' }), /not a URL/);
+  assert.ok(new MeshArc('mesharc_k', { fetch: f, baseUrl: 'http://localhost:8000' }));
+  assert.ok(new MeshArc('mesharc_k', { fetch: f, baseUrl: 'http://127.0.0.1:8000/' }));
+  assert.ok(new MeshArc('mesharc_k', { fetch: f, baseUrl: 'https://staging.mesharc.dev/' }));
+  const had = process.env.MESHARC_API_URL;
+  process.env.MESHARC_API_URL = 'http://evil.example';
+  assert.throws(() => new MeshArc('mesharc_k', { fetch: f }), /https/);
+  if (had === undefined) delete process.env.MESHARC_API_URL; else process.env.MESHARC_API_URL = had;
+});
+
+test('ids are encoded, so a crafted id stays inside its route', async () => {
+  const { arc, calls } = client([{ body: {} }, { body: {} }, { body: {} }]);
+  await arc.projects.get('x/../../me/keys');
+  await arc.revokeKey('k?admin=1');
+  await arc.runs.get('p 1', 'r#2');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/projects/x%2F..%2F..%2Fme%2Fkeys');
+  assert.equal(calls[1].url, 'https://api.mesharc.dev/api/v1/me/keys/k%3Fadmin%3D1');
+  assert.equal(calls[2].url, 'https://api.mesharc.dev/api/v1/projects/p%201/runs/r%232');
 });
 
 test('a call carries the bearer, the user agent and an idempotency key', async () => {

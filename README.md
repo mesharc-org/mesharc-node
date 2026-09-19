@@ -215,6 +215,12 @@ Two more cases: a network failure or a request that hits `timeoutMs` throws `Mes
 
 Every response says what it cost: `credits` on a page, `creditsUsed` on a job envelope, `X-MeshArc-Credits` on the HTTP response. A page costs the engine that read it — a plain fetch 1, a render 4 — and a refused page or a 404 costs nothing. The schedule and the plans are at [mesharc.dev/docs/billing](https://mesharc.dev/docs/billing).
 
+## Privacy and security
+
+The client talks to one host — the API base URL, `https://api.mesharc.dev` unless `MESHARC_API_URL` or `baseUrl` says otherwise — and to nothing else. The key travels only as a bearer header, only over HTTPS. Nothing is written to disk, no telemetry is sent, and the only environment variables read are `MESHARC_API_KEY` and `MESHARC_API_URL`.
+
+What MeshArc keeps about you and about the pages you crawl, and for how long, is in the [privacy policy](https://mesharc.dev/legal/privacy). How the service is secured is on the [security page](https://mesharc.dev/legal/security). To report a vulnerability in this client or in the service, write to security@mesharc.dev rather than opening a public issue — see [SECURITY.md](https://github.com/mesharc-org/mesharc-node/blob/main/SECURITY.md).
+
 ## Anything else
 
 `arc.call(method, path, body?, params?)` makes any request to the API and returns its JSON; `arc.raw(...)` returns the `Response`. The full reference is at [mesharc.dev/docs/api](https://mesharc.dev/docs/api).

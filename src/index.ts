@@ -60,7 +60,11 @@ export interface MeshArcOptions {
   maxRetries?: number;
   /** A fetch implementation to use instead of the global one. */
   fetch?: typeof fetch;
-  /** The API's base URL. Used by MeshArc's own test environments; the hosted API needs nothing here. */
+  /**
+   * The API's base URL; falls back to MESHARC_API_URL, then the hosted API.
+   * Must be https:// — the key travels as a bearer header — except for a
+   * local API on localhost.
+   */
   baseUrl?: string;
 }
 
@@ -93,8 +97,8 @@ export class MeshArc {
   readonly projects: Projects;
   readonly runs: Runs;
 
+  readonly #key: string;
   private readonly base: string;
-  private readonly key: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
@@ -110,14 +114,19 @@ export class MeshArc {
     }
     const key = apiKey || options.apiKey || readEnv('MESHARC_API_KEY') || '';
     if (!key) throw new Error('An API key is required: new MeshArc("mesharc_...") or set MESHARC_API_KEY.');
-    this.key = key;
-    this.base = (options.baseUrl ?? readEnv('MESHARC_API_URL') ?? DEFAULT_BASE).replace(/\/+$/, '') + '/api/v1';
+    this.#key = key;
+    this.base = baseUrlOf(options.baseUrl ?? readEnv('MESHARC_API_URL') ?? DEFAULT_BASE);
     this.fetchImpl = options.fetch ?? globalThis.fetch;
     if (typeof this.fetchImpl !== 'function') throw new Error('No fetch available: use Node 18+ or pass { fetch }.');
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.projects = new Projects(this);
     this.runs = new Runs(this);
+  }
+
+  /** What console.log and util.inspect show: the key is never printed. */
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return `MeshArc { base: '${this.base}', key: '${redact(this.#key)}', timeoutMs: ${this.timeoutMs}, maxRetries: ${this.maxRetries} }`;
   }
 
   // ---------------------------------------------------------------- transport
@@ -140,7 +149,7 @@ export class MeshArc {
       if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
     }
     const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.key}`,
+      Authorization: `Bearer ${this.#key}`,
       'User-Agent': `mesharc-node/${VERSION}`,
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -182,7 +191,7 @@ export class MeshArc {
     if (opts.wait === false) return job;
     const deadline = Date.now() + (opts.timeoutMs ?? 300_000);
     for (;;) {
-      const r = await this.call<{ status: string }>('GET', `/playground/${job.id}`);
+      const r = await this.call<{ status: string }>('GET', `/playground/${seg(job.id)}`);
       if (!isRunning(r.status)) return r;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`extraction ${job.id} is still ${r.status}`, job.id);
       await sleep(opts.pollMs ?? 2000);
@@ -219,7 +228,7 @@ export class MeshArc {
       if (!isRunning(out.status)) throw new MeshArcError(502, out.error ?? `scrape ${out.status}`, 'job_failed');
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`scrape ${out.id} is still ${out.status}`, out.id);
       await sleep(opts.pollMs ?? 2000);
-      out = await this.call<ScrapeEnvelope>('GET', `/scrape/${out.id}`, undefined, { formats });
+      out = await this.call<ScrapeEnvelope>('GET', `/scrape/${seg(out.id)}`, undefined, { formats });
     }
   }
 
@@ -227,7 +236,7 @@ export class MeshArc {
   async batch(batchId: string, opts: { formats?: string } & WaitOptions = {}): Promise<Json> {
     const deadline = Date.now() + (opts.timeoutMs ?? 3_600_000);
     for (;;) {
-      const r = await this.call<{ status: string }>('GET', `/scrape/${batchId}`, undefined, { formats: opts.formats ?? 'markdown' });
+      const r = await this.call<{ status: string }>('GET', `/scrape/${seg(batchId)}`, undefined, { formats: opts.formats ?? 'markdown' });
       if (!opts.wait || !isRunning(r.status)) return r;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`batch ${batchId} is still ${r.status}`, batchId);
       await sleep(opts.pollMs ?? 3000);
@@ -253,7 +262,7 @@ export class MeshArc {
 
   /** A handle on a crawl started earlier or elsewhere. */
   async getCrawl(crawlId: string): Promise<Crawl> {
-    return new Crawl(this, await this.call('GET', `/crawl/${crawlId}`, undefined, { limit: 1 }));
+    return new Crawl(this, await this.call('GET', `/crawl/${seg(crawlId)}`, undefined, { limit: 1 }));
   }
 
   /** Every URL a site declares in its sitemaps. `mapDetails` adds how they were found. */
@@ -275,7 +284,7 @@ export class MeshArc {
     while (out.status === 'running') {
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`map ${out.id} is still reading ${url}`, out.id);
       await sleep(pollMs ?? 2000);
-      out = await this.call('GET', `/map/${out.id}`, undefined, { search, limit });
+      out = await this.call('GET', `/map/${seg(out.id)}`, undefined, { search, limit });
     }
     if (out.status !== 'done') throw new MeshArcError(502, out.error ?? 'no sitemap could be read', 'job_failed');
     return out;
@@ -285,37 +294,37 @@ export class MeshArc {
 
   /** The pages of a run (the latest finished run by default). */
   pages(projectId: string, runId?: string): Promise<Json> {
-    return this.call('GET', `/projects/${projectId}/pages`, undefined, { run_id: runId });
+    return this.call('GET', `/projects/${seg(projectId)}/pages`, undefined, { run_id: runId });
   }
 
   /** One page in full: bodies, head fields, structured fields, versions. */
   page(projectId: string, url: string, runId?: string): Promise<Json> {
-    return this.call('GET', `/projects/${projectId}/pages/content`, undefined, { url, run_id: runId });
+    return this.call('GET', `/projects/${seg(projectId)}/pages/content`, undefined, { url, run_id: runId });
   }
 
   /** The change record of a run against the run before it. */
   changes(projectId: string, runId?: string): Promise<Json> {
-    return this.call('GET', `/projects/${projectId}/changes`, undefined, { run_id: runId });
+    return this.call('GET', `/projects/${seg(projectId)}/changes`, undefined, { run_id: runId });
   }
 
   /** The word-level diff of one page against the run before. */
   pageDiff(projectId: string, url: string, runId?: string): Promise<Json> {
-    return this.call('GET', `/projects/${projectId}/changes/page`, undefined, { url, run_id: runId });
+    return this.call('GET', `/projects/${seg(projectId)}/changes/page`, undefined, { url, run_id: runId });
   }
 
   /** Which pages say this (`content`: words, "phrases") or contain this (`selector`: CSS or XPath). */
   search(projectId: string, q: string, mode: 'content' | 'selector' = 'content', runId?: string): Promise<Json> {
-    return this.call('POST', `/projects/${projectId}/pages/search`, { mode, q, run_id: runId });
+    return this.call('POST', `/projects/${seg(projectId)}/pages/search`, { mode, q, run_id: runId });
   }
 
   /** Fetch these pages again now, as a scoped run. */
   recrawl(projectId: string, urls: string[]): Promise<Json> {
-    return this.call('POST', `/projects/${projectId}/pages/recrawl`, { urls });
+    return this.call('POST', `/projects/${seg(projectId)}/pages/recrawl`, { urls });
   }
 
   /** The seed, sitemap, URL list, feeds and patterns, with what the last run found through each. */
   sources(projectId: string): Promise<Json> {
-    return this.call('GET', `/projects/${projectId}/sources`);
+    return this.call('GET', `/projects/${seg(projectId)}/sources`);
   }
 
   /** A dataset as a stream. Resolves to the Response; read `.body`, `.text()` or pipe it. */
@@ -323,9 +332,9 @@ export class MeshArc {
     const dataset = opts.dataset ?? 'pages';
     const format = opts.format ?? 'jsonl';
     if (opts.urls) {
-      return this.raw('POST', `/projects/${projectId}/export`, { dataset, format, run_id: opts.runId, urls: opts.urls });
+      return this.raw('POST', `/projects/${seg(projectId)}/export`, { dataset, format, run_id: opts.runId, urls: opts.urls });
     }
-    return this.raw('GET', `/projects/${projectId}/export`, undefined, { dataset, format, run_id: opts.runId });
+    return this.raw('GET', `/projects/${seg(projectId)}/export`, undefined, { dataset, format, run_id: opts.runId });
   }
 
   // ---------------------------------------------------------------- workspace
@@ -350,7 +359,7 @@ export class MeshArc {
   }
 
   revokeKey(keyId: string): Promise<void> {
-    return this.call<void>('DELETE', `/me/keys/${keyId}`);
+    return this.call<void>('DELETE', `/me/keys/${seg(keyId)}`);
   }
 
   usage(): Promise<Json> {
@@ -440,15 +449,15 @@ export class Projects {
   }
 
   get(projectId: string): Promise<Json> {
-    return this.client.call('GET', `/projects/${projectId}`);
+    return this.client.call('GET', `/projects/${seg(projectId)}`);
   }
 
   update(projectId: string, fields: Json): Promise<Json> {
-    return this.client.call('PATCH', `/projects/${projectId}`, fields);
+    return this.client.call('PATCH', `/projects/${seg(projectId)}`, fields);
   }
 
   delete(projectId: string): Promise<void> {
-    return this.client.call<void>('DELETE', `/projects/${projectId}`);
+    return this.client.call<void>('DELETE', `/projects/${seg(projectId)}`);
   }
 }
 
@@ -456,15 +465,15 @@ export class Runs {
   constructor(private readonly client: MeshArc) {}
 
   list(projectId: string, limit = 25): Promise<Json[]> {
-    return this.client.call<Json[]>('GET', `/projects/${projectId}/runs`, undefined, { limit });
+    return this.client.call<Json[]>('GET', `/projects/${seg(projectId)}/runs`, undefined, { limit });
   }
 
   get(projectId: string, runId: string): Promise<Json> {
-    return this.client.call('GET', `/projects/${projectId}/runs/${runId}`);
+    return this.client.call('GET', `/projects/${seg(projectId)}/runs/${seg(runId)}`);
   }
 
   async start(projectId: string, opts: WaitOptions = {}): Promise<Json> {
-    const run = await this.client.call<{ id: string }>('POST', `/projects/${projectId}/runs`, { trigger: 'api' });
+    const run = await this.client.call<{ id: string }>('POST', `/projects/${seg(projectId)}/runs`, { trigger: 'api' });
     return opts.wait ? this.wait(projectId, run.id, opts) : run;
   }
 
@@ -479,7 +488,7 @@ export class Runs {
   }
 
   cancel(projectId: string, runId: string): Promise<Json> {
-    return this.client.call('POST', `/projects/${projectId}/runs/${runId}/cancel`);
+    return this.client.call('POST', `/projects/${seg(projectId)}/runs/${seg(runId)}/cancel`);
   }
 }
 
@@ -512,7 +521,7 @@ export class Crawl {
 
   /** The envelope as it stands now, without its pages. */
   async refresh(formats = 'markdown'): Promise<Json> {
-    this.envelope = await this.client.call('GET', `/crawl/${this.id}`, undefined, { limit: 1, formats });
+    this.envelope = await this.client.call('GET', `/crawl/${seg(this.id)}`, undefined, { limit: 1, formats });
     return this.envelope;
   }
 
@@ -535,7 +544,7 @@ export class Crawl {
     let cursor: string | undefined;
     for (;;) {
       const page = await this.client.call<{ data: Json[]; next?: string; cursor?: string; status: string }>(
-        'GET', `/crawl/${this.id}`, undefined, { formats: opts.formats ?? 'markdown', limit: opts.limit ?? 25, cursor },
+        'GET', `/crawl/${seg(this.id)}`, undefined, { formats: opts.formats ?? 'markdown', limit: opts.limit ?? 25, cursor },
       );
       const { data, ...envelope } = page;
       this.envelope = envelope;
@@ -554,17 +563,45 @@ export class Crawl {
 
   /** Make this one-shot crawl a project. Its run and pages are already in place. */
   keep(opts: { name?: string; schedule?: string; retention?: string } = {}): Promise<Json> {
-    return this.client.call('POST', `/crawl/${this.id}/keep`, opts);
+    return this.client.call('POST', `/crawl/${seg(this.id)}/keep`, opts);
   }
 
   async cancel(): Promise<Json> {
-    await this.client.call<void>('DELETE', `/crawl/${this.id}`);
+    await this.client.call<void>('DELETE', `/crawl/${seg(this.id)}`);
     this.envelope = { ...this.envelope, status: 'cancelled' };
     return this.envelope;
   }
 }
 
 // ------------------------------------------------------------------ helpers
+
+/**
+ * The API base, ending in /api/v1. The key only travels over HTTPS: a plain
+ * http:// base is refused unless it points at this machine, so a poisoned
+ * MESHARC_API_URL cannot quietly send the key somewhere else in clear text.
+ */
+function baseUrlOf(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`baseUrl is not a URL: ${raw}`);
+  }
+  const local = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]';
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) {
+    throw new Error(`baseUrl must be https:// (${raw}); http:// is allowed only for localhost.`);
+  }
+  return raw.replace(/\/+$/, '') + '/api/v1';
+}
+
+/** An id as one path segment, so it cannot reach another route. */
+function seg(id: string): string {
+  return encodeURIComponent(String(id));
+}
+
+function redact(key: string): string {
+  return key.length > 12 ? `${key.slice(0, 8)}…${key.slice(-4)}` : '…';
+}
 
 function backoff(attempt: number): number {
   return 500 * 2 ** attempt + Math.floor(Math.random() * 250);
