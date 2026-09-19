@@ -220,8 +220,8 @@ Every response says what it cost: `credits` on a page, `creditsUsed` on a job en
 `arc.call(method, path, body?, params?)` makes any request to the API and returns its JSON; `arc.raw(...)` returns the `Response`. The full reference is at [mesharc.dev/docs/api](https://mesharc.dev/docs/api).
 
 - Documentation: [mesharc.dev/docs](https://mesharc.dev/docs)
-- Python client: `pip install mesharc` — [mesharc-python](https://github.com/Siddharth-DWT/mesharc-python); it also ships the MCP server for agents
-- Issues and pull requests: [mesharc-node](https://github.com/Siddharth-DWT/mesharc-node)
+- Python client: `pip install mesharc` — [mesharc-python](https://github.com/mesharc-org/mesharc-python); it also ships the MCP server for agents
+- Issues and pull requests: [mesharc-node](https://github.com/mesharc-org/mesharc-node)
 - Questions: hello@mesharc.dev
 
 MIT.
