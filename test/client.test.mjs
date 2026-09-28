@@ -158,3 +158,23 @@ test('a 204 resolves to undefined', async () => {
   const { arc } = client([{ status: 204 }]);
   assert.equal(await arc.revokeKey('k1'), undefined);
 });
+
+test('a key out of requests waits for its window before the next call', async () => {
+  const { arc, calls } = client([
+    { body: { a: 1 }, headers: { 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '0.3' } },
+    { body: { b: 2 } },
+  ]);
+  await arc.call('GET', '/me');
+  const started = Date.now();
+  await arc.call('GET', '/me');
+  assert.ok(Date.now() - started >= 200, 'the second call waited for the window');
+  assert.equal(calls.length, 2);
+});
+
+test('pace does not wait while the key has requests to spare', async () => {
+  const { arc } = client([{ body: {}, headers: { 'X-RateLimit-Remaining': '50', 'X-RateLimit-Reset': '30' } }]);
+  await arc.call('GET', '/me');
+  const started = Date.now();
+  await arc.pace();
+  assert.ok(Date.now() - started < 100);
+});
