@@ -125,7 +125,7 @@ test('scrape of one URL returns the page, polling when the API answers with a jo
 
 test('a job that stays running past the deadline throws MeshArcTimeoutError with the id', async () => {
   const { arc } = client([{ body: { id: 'j2', status: 'running' } }, { body: { id: 'j2', status: 'running' } }]);
-  await assert.rejects(arc.scrape('https://a.test/', undefined, { pollMs: 1, timeoutMs: 0 }), err => {
+  await assert.rejects(arc.scrape('https://a.test/', undefined, { pollMs: 1, timeoutMs: -1 }), err => {
     assert.ok(err instanceof MeshArcTimeoutError);
     assert.equal(err.jobId, 'j2');
     return true;
