@@ -74,4 +74,6 @@ contain breaking changes, and the changelog says so. A Node version is supported
 after its upstream end of life; dropping one is a minor release with a changelog entry.
 
 To rehearse a release without publishing, run the Release workflow by hand (Actions → Release →
-Run workflow). It checks, tests, builds and packs the package, and publishes nothing.
+Run workflow). It checks, tests, builds and packs the package, and publishes nothing. Run it
+on the release pull request, after the version is bumped: npm refuses even a dry run for a
+version that is already published.
