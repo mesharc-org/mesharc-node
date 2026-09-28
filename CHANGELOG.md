@@ -6,6 +6,10 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- The client paces itself against the API key's rate limit. When a response's `X-RateLimit-Remaining` header shows the key is almost out of requests, the next request and the waiting loops hold until the window resets instead of being refused. `arc.pace()` does the same wait on demand.
+
 ### Changed
 
 - Requires Node 20 or newer. Node 18 reached its end of life in April 2025.

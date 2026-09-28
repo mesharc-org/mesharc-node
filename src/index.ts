@@ -129,8 +129,6 @@ export class MeshArc {
     return `MeshArc { base: '${this.base}', key: '${redact(this.#key)}', timeoutMs: ${this.timeoutMs}, maxRetries: ${this.maxRetries} }`;
   }
 
-  // ---------------------------------------------------------------- transport
-
   /** Any API route. Resolves to the parsed JSON body (undefined for 204). */
   async call<T = Json>(method: string, path: string, body?: unknown, params?: Params, idempotencyKey?: string): Promise<T> {
     const res = await this.request(method, path, body, params, idempotencyKey);
@@ -141,6 +139,33 @@ export class MeshArc {
   /** Any API route, resolving to the raw Response — for streamed bodies such as exports. */
   raw(method: string, path: string, body?: unknown, params?: Params, idempotencyKey?: string): Promise<Response> {
     return this.request(method, path, body, params, idempotencyKey);
+  }
+
+  // What the last response said about the key's rate limit, so a polling
+  // loop can slow down before it is refused rather than after.
+  private remaining: number | null = null;
+  private resetAt = 0;
+
+  private noteLimits(res: Response) {
+    const remaining = res.headers.get('x-ratelimit-remaining');
+    if (remaining === null) return;
+    const n = Number(remaining);
+    if (!Number.isFinite(n)) return;
+    this.remaining = n;
+    this.resetAt = Date.now() + Number(res.headers.get('x-ratelimit-reset') ?? 0) * 1000;
+  }
+
+  /**
+   * Waits out the window when the key is nearly out of requests. A wait loop
+   * that polls every few seconds would otherwise spend a small plan's minute
+   * on polling and be refused for the call that matters.
+   */
+  async pace(floor = 3): Promise<void> {
+    if (this.remaining !== null && this.remaining <= floor) {
+      const left = this.resetAt - Date.now();
+      if (left > 0) await sleep(Math.min(left, 60_000));
+      this.remaining = null;
+    }
   }
 
   private async request(method: string, path: string, body?: unknown, params?: Params, idempotencyKey?: string): Promise<Response> {
@@ -159,6 +184,8 @@ export class MeshArc {
     const repeatable = method === 'GET' || method === 'DELETE' || !!idempotencyKey;
 
     for (let attempt = 0; ; attempt++) {
+      // Out of requests this minute: wait for the window rather than send a call that will only be refused.
+      await this.pace(0);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       let res: Response;
@@ -174,6 +201,7 @@ export class MeshArc {
       } finally {
         clearTimeout(timer);
       }
+      this.noteLimits(res);
       if (res.status < 400) return res;
       if (RETRY_STATUSES.has(res.status) && repeatable && attempt < this.maxRetries) {
         await sleep(retryAfterMs(res) ?? backoff(attempt));
@@ -182,8 +210,6 @@ export class MeshArc {
       throw await errorFrom(res);
     }
   }
-
-  // --------------------------------------------------------- one or many URLs
 
   /** One URL with every format, as the app's playground reads it. Resolves to the finished extraction. */
   async extract(url: string, config?: Config, opts: WaitOptions = {}): Promise<Json> {
@@ -195,6 +221,7 @@ export class MeshArc {
       if (!isRunning(r.status)) return r;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`extraction ${job.id} is still ${r.status}`, job.id);
       await sleep(opts.pollMs ?? 2000);
+      await this.pace();
     }
   }
 
@@ -228,6 +255,7 @@ export class MeshArc {
       if (!isRunning(out.status)) throw new MeshArcError(502, out.error ?? `scrape ${out.status}`, 'job_failed');
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`scrape ${out.id} is still ${out.status}`, out.id);
       await sleep(opts.pollMs ?? 2000);
+      await this.pace();
       out = await this.call<ScrapeEnvelope>('GET', `/scrape/${seg(out.id)}`, undefined, { formats });
     }
   }
@@ -240,10 +268,9 @@ export class MeshArc {
       if (!opts.wait || !isRunning(r.status)) return r;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`batch ${batchId} is still ${r.status}`, batchId);
       await sleep(opts.pollMs ?? 3000);
+      await this.pace();
     }
   }
-
-  // ------------------------------------------------------------ a whole site
 
   /**
    * Crawl a site once, with no project to set up first. Resolves to a Crawl
@@ -284,13 +311,12 @@ export class MeshArc {
     while (out.status === 'running') {
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`map ${out.id} is still reading ${url}`, out.id);
       await sleep(pollMs ?? 2000);
+      await this.pace();
       out = await this.call('GET', `/map/${seg(out.id)}`, undefined, { search, limit });
     }
     if (out.status !== 'done') throw new MeshArcError(502, out.error ?? 'no sitemap could be read', 'job_failed');
     return out;
   }
-
-  // ------------------------------------------------------- what a project holds
 
   /** The pages of a run (the latest finished run by default). */
   pages(projectId: string, runId?: string): Promise<Json> {
@@ -336,8 +362,6 @@ export class MeshArc {
     }
     return this.raw('GET', `/projects/${seg(projectId)}/export`, undefined, { dataset, format, run_id: opts.runId });
   }
-
-  // ---------------------------------------------------------------- workspace
 
   /** The workspace, its plan and limits, and what this key may do. */
   me(): Promise<Json> {
@@ -484,6 +508,7 @@ export class Runs {
       if (run.status !== 'running' && !run.queued) return run;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`run ${runId} is still ${String(run.status)}`, runId);
       await sleep(opts.pollMs ?? 3000);
+      await this.client.pace();
     }
   }
 
@@ -532,6 +557,7 @@ export class Crawl {
       if (!isRunning(e.status)) return e;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`crawl ${this.id} is still ${String(e.status)}`, this.id);
       await sleep(opts.pollMs ?? 3000);
+      await this.client.pace();
     }
   }
 
@@ -558,6 +584,7 @@ export class Crawl {
       if (opts.wait === false || !isRunning(page.status)) return;
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`crawl ${this.id} is still ${page.status}`, this.id);
       await sleep(opts.pollMs ?? 3000);
+      await this.client.pace();
     }
   }
 
@@ -572,8 +599,6 @@ export class Crawl {
     return this.envelope;
   }
 }
-
-// ------------------------------------------------------------------ helpers
 
 /**
  * The API base, ending in /api/v1. The key only travels over HTTPS: a plain
