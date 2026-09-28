@@ -7,7 +7,7 @@ The Node client for the [MeshArc](https://mesharc.dev) API: a URL in, clean cont
 - **Map** what a site declares in its sitemaps before fetching any of it.
 - **Watch** a site over time: projects, scheduled runs, and a change record — pages added, removed, modified, field by field.
 
-Zero dependencies. Node 18 or newer. TypeScript types included; ESM and CommonJS builds.
+Zero dependencies. Node 20 or newer. TypeScript types included; ESM and CommonJS builds.
 
 ## Install
 
