@@ -6,6 +6,19 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+### Added
+
+- **Web search, so a script can find pages as well as read them.** `arc.webSearch(query, opts)` returns the results for a query — title, URL, snippet and the engine each came from — and, with `scrape`, each result's page too; it waits for the search to finish, and a search every engine refused resolves with status `blocked` rather than throwing. `arc.getSearch(id)` reads a search as it stands now, and `arc.searches({ q, limit })` yields the workspace's searches, newest first. The types `WebSearchOptions`, `WebSearchResult`, `WebSearchHit`, `SearchAttempt` and `SearchSummary` are exported. Needs the API's `/search` route, live on mesharc.dev, and a key that can write.
+
+### Changed
+
+- **Breaking for code that told the two apart by class:** `MeshArcTimeoutError` now extends `MeshArcError`, with status 0 and code `timeout`, so a `catch` that checks `instanceof MeshArcError` first now also catches job timeouts. Tell them apart with `instanceof MeshArcTimeoutError` (checked first) or by `jobId`. The message is unchanged.
+
+### Fixed
+
+- `call()` on a 200 response with an empty body resolves to `undefined` instead of throwing a `SyntaxError`.
+- The `ExportOptions` types list every dataset and format the API offers: `rows`, `row-events`, `llms` and `llms-full` beside the earlier five, and `txt` beside `jsonl` and `csv`.
+
 ## 0.2.0 - 2026-09-28
 
 ### Added

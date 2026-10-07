@@ -5,6 +5,7 @@ The Node client for the [MeshArc](https://mesharc.dev) API: a URL in, clean cont
 - **Scrape** one page or a batch — markdown, text, HTML, links, structured fields, a screenshot.
 - **Crawl** a whole site with no project to set up first, and keep it as one if it turns out to be worth watching.
 - **Map** what a site declares in its sitemaps before fetching any of it.
+- **Search** the web: results for a query, and their pages read too if you ask.
 - **Watch** a site over time: projects, scheduled runs, and a change record — pages added, removed, modified, field by field.
 
 Zero dependencies. Node 20 or newer. TypeScript types included; ESM and CommonJS builds.
@@ -130,6 +131,33 @@ console.log(details.totals, details.creditsUsed);   // { files: 29, urls: 508431
 
 A map costs one credit per sitemap file read — most sites are one file.
 
+## Searching the web
+
+```ts
+const out = await arc.webSearch('node fetch retry', {
+  limit: 5,                                  // 1 to 10 results
+  freshness: 'month',                        // 'hour' | 'day' | 'week' | 'month' | 'year'
+  includeDomains: ['github.com', 'nodejs.org'],
+  scrape: true,                              // read each result's page too, as markdown
+});
+
+if (out.status === 'blocked') console.log('every engine refused', out.attempts);
+for (const hit of out.data) console.log(hit.position, hit.url, hit.title, hit.engine, hit.page?.markdown);
+console.log(out.cached, out.creditsUsed);
+```
+
+`webSearch` waits for the search to finish and resolves to it: `queued` and `running` are polled, `done` and `blocked` (every engine refused the results page) resolve, and `error` throws `MeshArcError`. `country`, `lang` and `excludeDomains` narrow the results further; `scrape` also takes `{ formats, maxCredits }`. `{ wait: false }` returns the search at once; `arc.getSearch(id)` reads it as it stands now.
+
+```ts
+for await (const s of arc.searches({ q: 'retry', limit: 50 })) console.log(s.id, s.query, s.status, s.resultCount, s.creditsUsed);
+```
+
+`searches` yields the workspace's web searches, newest first, following the cursor; `q` keeps those whose query contains it.
+
+A web search needs a key that can write, and spends credits. A results page every engine refused is free. An equal search — the same query, country, lang, freshness and domains — within an hour of a finished one comes from the cache (`cached: true`) with no charge for the results page. A page read with `scrape` is always charged, as a scrape.
+
+`search()` is something else: it looks inside a project's pages (see below).
+
 ## Watching a site: projects and runs
 
 ```ts
@@ -157,7 +185,7 @@ const diff = await arc.pageDiff(project.id, 'https://docs.example.com/pricing');
 | `search(projectId, q, 'content' \| 'selector', runId?)` | Which pages say this (words, `"phrases"`) or contain this (CSS / XPath) |
 | `recrawl(projectId, urls)` | Fetch these pages again, now |
 | `sources(projectId)` | The seed, sitemap, URL list, feeds and patterns with what the last run found through each |
-| `export(projectId, { dataset, format, runId, urls })` | A dataset (`pages`, `markdown`, `changes`, `fields`, `sitemap`) as `jsonl` or `csv` — returns the `Response`, stream it |
+| `export(projectId, { dataset, format, runId, urls })` | A dataset (`pages`, `markdown`, `changes`, `fields`, `sitemap`, `rows`, `row-events`, `llms`, `llms-full`) as `jsonl`, `csv` or `txt` — returns the `Response`, stream it. The API refuses some pairs: `llms` and `llms-full` come only as `txt`, `txt` only for those two, and `markdown` only as `jsonl` |
 
 ```ts
 const csv = await (await arc.export(project.id, { dataset: 'pages', format: 'csv' })).text();
@@ -177,7 +205,7 @@ await arc.revokeKey(key.id);
 
 ## Errors
 
-Every failure throws `MeshArcError`:
+Every failure throws `MeshArcError`, a job the client stopped waiting for included:
 
 ```ts
 import { MeshArc, MeshArcError } from 'mesharc';
@@ -202,11 +230,22 @@ try {
 
 `requestId` is the id the API put on the response and in its own logs, so a support conversation starts from one string.
 
-Two more cases: a network failure or a request that hits `timeoutMs` throws `MeshArcError` with `status: 0` and `code: 'network'` or `'timeout'`; a job the client stopped waiting for throws `MeshArcTimeoutError`, which carries `jobId` so you can poll it later (`arc.getCrawl(id)`, `arc.batch(id)`).
+Two more cases, both with `status: 0`: a network failure or a request that hits `timeoutMs` throws `MeshArcError` with `code: 'network'` or `'timeout'`; a job the client stopped waiting for throws `MeshArcTimeoutError`, which is also a `MeshArcError` (`code: 'timeout'`) and carries `jobId` so you can poll it later (`arc.getCrawl(id)`, `arc.batch(id)`, `arc.getSearch(id)`). Both timeouts have `code: 'timeout'`; tell them apart with `e instanceof MeshArcTimeoutError` or by `jobId`:
+
+```ts
+import { MeshArcError, MeshArcTimeoutError } from 'mesharc';
+
+try {
+  await arc.crawl('https://example.com', { wait: true, timeoutMs: 60_000 });
+} catch (e) {
+  if (e instanceof MeshArcTimeoutError) console.log('still running', e.jobId);   // check this first
+  else if (e instanceof MeshArcError) console.log(e.status, e.code);
+}
+```
 
 ## Idempotency and timeouts
 
-- `scrape`, `scrapeOne` and `crawl` take `idempotencyKey`: send the same key again within 24 hours and you get the first answer back rather than a second job.
+- `scrape`, `scrapeOne`, `crawl` and `webSearch` take `idempotencyKey`: send the same key again within 24 hours and you get the first answer back rather than a second job.
 - Waiting calls take `{ wait, pollMs, timeoutMs }`. `wait: false` returns the envelope at once; the default polls every 3 s for up to an hour.
 - Every HTTP request is aborted after `timeoutMs` (150 s by default) and retried on 429, 502, 503, 504 and network failures when it is safe to repeat — a GET, a DELETE, or a POST with an idempotency key — up to `maxRetries` times (2), honouring `Retry-After`.
 - `apiTimeoutS` on a single scrape is how long the API itself holds the request open (60 s by default, 120 at most); a slower page comes back as an id and is polled.
