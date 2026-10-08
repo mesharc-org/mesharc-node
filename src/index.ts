@@ -39,13 +39,21 @@ export class MeshArcError extends Error {
   }
 }
 
-/** A job that was still running when the client stopped waiting for it. */
-export class MeshArcTimeoutError extends Error {
+/**
+ * A job the client stopped waiting for while it was still running.
+ *
+ * It is also a MeshArcError, with status 0 and code 'timeout', so one
+ * `catch (e) { if (e instanceof MeshArcError) ... }` covers it. An HTTP
+ * request that timed out carries code 'timeout' too; tell the two apart with
+ * `e instanceof MeshArcTimeoutError` or by `jobId`.
+ */
+export class MeshArcTimeoutError extends MeshArcError {
   /** The job that is still running; poll it later with the matching `get*` method. */
   readonly jobId: string;
 
   constructor(message: string, jobId = '') {
-    super(message);
+    super(0, message, 'timeout');
+    this.message = message;
     this.name = 'MeshArcTimeoutError';
     this.jobId = jobId;
   }
@@ -129,11 +137,13 @@ export class MeshArc {
     return `MeshArc { base: '${this.base}', key: '${redact(this.#key)}', timeoutMs: ${this.timeoutMs}, maxRetries: ${this.maxRetries} }`;
   }
 
-  /** Any API route. Resolves to the parsed JSON body (undefined for 204). */
+  /** Any API route. Resolves to the parsed JSON body (undefined for 204 or an empty body). */
   async call<T = Json>(method: string, path: string, body?: unknown, params?: Params, idempotencyKey?: string): Promise<T> {
     const res = await this.request(method, path, body, params, idempotencyKey);
     if (res.status === 204) return undefined as T;
-    return (await res.json()) as T;
+    const text = await res.text();
+    if (!text.trim()) return undefined as T;
+    return JSON.parse(text) as T;
   }
 
   /** Any API route, resolving to the raw Response — for streamed bodies such as exports. */
@@ -318,6 +328,65 @@ export class MeshArc {
     return out;
   }
 
+  /**
+   * Web results for a query: title, URL and snippet per result, each naming
+   * the engine it came from. Not to be confused with `search`, which looks
+   * inside a project's pages.
+   *
+   * Needs a key that can write, and spends credits: a refused results page
+   * is free, and an equal search within an hour of a finished one is answered
+   * from the cache with no charge for the results page. With `scrape`, each
+   * result's page is fetched too and charged as a scrape; valid formats are
+   * markdown, text, rawHtml, cleanHtml, links, raw, screenshot and json.
+   *
+   * Resolves to the finished search. When every engine refuses, the search
+   * resolves with status `blocked` rather than throwing. `wait: false`
+   * resolves to the first answer, which may still be queued or running.
+   */
+  async webSearch(query: string, opts: WebSearchOptions = {}): Promise<WebSearchResult> {
+    const body: Json = { query };
+    if (opts.limit !== undefined) body.limit = opts.limit;
+    if (opts.country !== undefined) body.country = opts.country;
+    if (opts.lang !== undefined) body.lang = opts.lang;
+    if (opts.freshness !== undefined) body.freshness = opts.freshness;
+    if (opts.includeDomains !== undefined) body.includeDomains = opts.includeDomains;
+    if (opts.excludeDomains !== undefined) body.excludeDomains = opts.excludeDomains;
+    if (opts.destination !== undefined) body.destination = opts.destination;
+    if (opts.scrape === true) body.scrape = { formats: ['markdown'] };
+    else if (opts.scrape) body.scrape = opts.scrape;
+    body.timeout = opts.apiTimeoutS ?? (opts.wait !== false ? 60 : 0);
+    let out = await this.call<WebSearchResult>('POST', '/search', body, undefined, opts.idempotencyKey);
+    if (opts.wait === false) return out;
+    const deadline = Date.now() + (opts.timeoutMs ?? 600_000);
+    for (;;) {
+      if (out.status === 'done' || out.status === 'blocked') return out;
+      if (!isRunning(out.status)) throw new MeshArcError(502, out.error || `search ${out.status}`, 'job_failed');
+      if (Date.now() > deadline) throw new MeshArcTimeoutError(`search ${out.id} is still ${out.status}`, out.id);
+      await sleep(opts.pollMs ?? 2000);
+      await this.pace();
+      out = await this.call<WebSearchResult>('GET', `/search/${seg(out.id)}`);
+    }
+  }
+
+  /** A web search started earlier, as it stands now. */
+  getSearch(searchId: string): Promise<WebSearchResult> {
+    return this.call<WebSearchResult>('GET', `/search/${seg(searchId)}`);
+  }
+
+  /** The workspace's web searches, newest first; `q` keeps those whose query contains it. */
+  async *searches(opts: { q?: string; limit?: number } = {}): AsyncGenerator<SearchSummary> {
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.call<{ data: SearchSummary[]; next?: string | null }>(
+        'GET', '/search', undefined, { q: opts.q, limit: opts.limit ?? 25, cursor },
+      );
+      for (const row of page.data) yield row;
+      if (!page.next) return;
+      cursor = cursorOf(page.next);
+      if (cursor === undefined) return;
+    }
+  }
+
   /** The pages of a run (the latest finished run by default). */
   pages(projectId: string, runId?: string): Promise<Json> {
     return this.call('GET', `/projects/${seg(projectId)}/pages`, undefined, { run_id: runId });
@@ -437,9 +506,103 @@ export interface MapOptions extends WaitOptions {
   [option: string]: unknown;
 }
 
+export interface WebSearchOptions extends WaitOptions {
+  /** How many results to return, 1 to 10. */
+  limit?: number;
+  /** Two-letter country code the results are for. */
+  country?: string;
+  /** Language of the results. */
+  lang?: string;
+  /** Only results published within this period. */
+  freshness?: 'hour' | 'day' | 'week' | 'month' | 'year';
+  /** Keep only results from these domains (20 at most). */
+  includeDomains?: string[];
+  /** Drop results from these domains (20 at most). */
+  excludeDomains?: string[];
+  /** Fetch each result's page too: `true` for markdown, or the formats and a credit cap. */
+  scrape?: boolean | { formats?: string[]; maxCredits?: number };
+  /** A destination to deliver the results to. */
+  destination?: string;
+  /** Seconds the API holds the request open for the results (60 by default, 0 with `wait: false`, 120 at most). */
+  apiTimeoutS?: number;
+  /** The same key within 24 hours returns the first answer rather than starting a second search. */
+  idempotencyKey?: string;
+}
+
+/** One web search result. */
+export interface WebSearchHit extends Json {
+  position: number;
+  url: string;
+  title: string;
+  snippet: string;
+  /** The kind of result: `web` for an organic result. */
+  source: string;
+  engine: string;
+  /** The result's page when the search scraped it; `{ url, status: 'pending' | 'expired' }` until it lands or after it is gone. */
+  page?: Json;
+}
+
+/** One engine's try at the results page. */
+export interface SearchAttempt extends Json {
+  engine?: string | null;
+  ok?: boolean | null;
+  reason?: string | null;
+  rung?: string | null;
+  verdict?: string | null;
+  credits?: number | null;
+}
+
+/** A web search: its status, the results under `data`, and what it cost. */
+export interface WebSearchResult extends Json {
+  id: string;
+  kind: 'search';
+  /** queued, running (also while scraped pages land), done, blocked (every engine refused; free) or error. */
+  status: string;
+  query: string;
+  params: Json;
+  data: WebSearchHit[];
+  engine: string;
+  rung: string;
+  cached: boolean;
+  batchId: string | null;
+  creditsUsed: number;
+  attempts: SearchAttempt[];
+  /** The URL to poll while the search runs; null once it is finished. */
+  next: string | null;
+  /** Empty when there is no error. */
+  error: string;
+  createdAt: string | null;
+  finishedAt: string | null;
+  request_id: string;
+}
+
+/** One line of the web search history. */
+export interface SearchSummary extends Json {
+  id: string;
+  query: string;
+  params: Json;
+  status: string;
+  engine: string;
+  rung: string;
+  cached: boolean;
+  resultCount: number;
+  /** The first three results' hosts. */
+  domains: string[];
+  scraped: boolean;
+  creditsUsed: number;
+  error: string;
+  createdAt: string | null;
+  finishedAt: string | null;
+}
+
+/**
+ * What `export` streams. The API refuses some dataset/format pairs:
+ * 'llms' and 'llms-full' come only as 'txt', 'txt' only for those two, and
+ * 'markdown' only as 'jsonl'.
+ */
 export interface ExportOptions {
-  dataset?: 'pages' | 'markdown' | 'changes' | 'fields' | 'sitemap';
-  format?: 'jsonl' | 'csv';
+  dataset?: 'pages' | 'markdown' | 'changes' | 'fields' | 'sitemap' | 'rows' | 'row-events' | 'llms' | 'llms-full';
+  format?: 'jsonl' | 'csv' | 'txt';
   runId?: string;
   urls?: string[];
 }
