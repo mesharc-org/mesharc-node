@@ -104,6 +104,8 @@ function isRunning(status: unknown): boolean {
 export class MeshArc {
   readonly projects: Projects;
   readonly runs: Runs;
+  /** Web searches and agent requests kept and run on a schedule. Not `monitor()`, the job queue. */
+  readonly monitors: Monitors;
 
   readonly #key: string;
   private readonly base: string;
@@ -130,6 +132,7 @@ export class MeshArc {
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.projects = new Projects(this);
     this.runs = new Runs(this);
+    this.monitors = new Monitors(this);
   }
 
   /** What console.log and util.inspect show: the key is never printed. */
@@ -331,13 +334,16 @@ export class MeshArc {
   /**
    * Web results for a query: title, URL and snippet per result, each naming
    * the engine it came from. Not to be confused with `search`, which looks
-   * inside a project's pages.
+   * inside a project's pages. `news` reads the engines' news results instead,
+   * each with its publisher and age; `page` reads further in (page 2 is
+   * results 11 to 20).
    *
    * Needs a key that can write, and spends credits: a refused results page
-   * is free, and an equal search within an hour of a finished one is answered
-   * from the cache with no charge for the results page. With `scrape`, each
-   * result's page is fetched too and charged as a scrape; valid formats are
-   * markdown, text, rawHtml, cleanHtml, links, raw, screenshot and json.
+   * is free, and an equal search within an hour (ten minutes for news) of a
+   * finished one is answered from the cache with no charge for the results
+   * page. With `scrape`, each result's page is fetched too and charged as a
+   * scrape; valid formats are markdown, text, rawHtml, cleanHtml, links, raw,
+   * screenshot and json.
    *
    * Resolves to the finished search. When every engine refuses, the search
    * resolves with status `blocked` rather than throwing. `wait: false`
@@ -348,6 +354,8 @@ export class MeshArc {
     if (opts.limit !== undefined) body.limit = opts.limit;
     if (opts.country !== undefined) body.country = opts.country;
     if (opts.lang !== undefined) body.lang = opts.lang;
+    if (opts.news) body.sources = ['news'];
+    if (opts.page !== undefined) body.page = opts.page;
     if (opts.freshness !== undefined) body.freshness = opts.freshness;
     if (opts.includeDomains !== undefined) body.includeDomains = opts.includeDomains;
     if (opts.excludeDomains !== undefined) body.excludeDomains = opts.excludeDomains;
@@ -375,16 +383,56 @@ export class MeshArc {
 
   /** The workspace's web searches, newest first; `q` keeps those whose query contains it. */
   async *searches(opts: { q?: string; limit?: number } = {}): AsyncGenerator<SearchSummary> {
-    let cursor: string | undefined;
-    for (;;) {
-      const page = await this.call<{ data: SearchSummary[]; next?: string | null }>(
-        'GET', '/search', undefined, { q: opts.q, limit: opts.limit ?? 25, cursor },
-      );
-      for (const row of page.data) yield row;
-      if (!page.next) return;
-      cursor = cursorOf(page.next);
-      if (cursor === undefined) return;
-    }
+    yield* paged<SearchSummary>(this, '/search', { q: opts.q, limit: opts.limit ?? 25 });
+  }
+
+  /**
+   * Ask the agent: it searches, reads pages and answers the prompt, as JSON
+   * matching `schema` when one is given and as `{ text }` otherwise.
+   *
+   * Needs a key that can write, and spends credits: each page as it is read
+   * (a refused page is free) and the model's tokens at the model provider's
+   * price plus 20%, or 1 credit per 1,000 tokens on the workspace's own
+   * connection (`connectionId`). `maxCredits` caps what one run may spend; a
+   * run that reaches it stops with status `credit_limit` and what it had
+   * under `data.partial`, and `run.continue()` carries it on.
+   *
+   * Resolves to an AgentRun at once, or once the run finishes or
+   * `apiTimeoutS` passes (120 at most), whichever comes first; `run.wait()`
+   * waits for the answer and `run.trace()` follows the steps. With a
+   * `webhook`, its signing secret is `run.webhookSecret`, once.
+   */
+  async agent(prompt: string, opts: AgentOptions = {}): Promise<AgentRun> {
+    const body: Json = { prompt };
+    if (opts.urls !== undefined) body.urls = opts.urls;
+    if (opts.schema !== undefined) body.schema = opts.schema;
+    if (opts.maxCredits !== undefined) body.maxCredits = opts.maxCredits;
+    if (opts.maxSteps !== undefined) body.maxSteps = opts.maxSteps;
+    if (opts.allowedDomains !== undefined) body.allowedDomains = opts.allowedDomains;
+    if (opts.webhook !== undefined) body.webhook = opts.webhook;
+    if (opts.connectionId !== undefined) body.connectionId = opts.connectionId;
+    if (opts.apiTimeoutS !== undefined && opts.apiTimeoutS > 0) body.timeout = Math.min(opts.apiTimeoutS, 120);
+    return new AgentRun(this, await this.call<AgentEnvelope>('POST', '/agent', body, undefined, opts.idempotencyKey));
+  }
+
+  /**
+   * A handle on an agent run started earlier or elsewhere. A run past its
+   * keep date (7 days by default) throws MeshArcError with status 410 and
+   * code 'expired'.
+   */
+  async getAgent(runId: string): Promise<AgentRun> {
+    return new AgentRun(this, await this.call<AgentEnvelope>('GET', `/agent/${seg(runId)}`));
+  }
+
+  /**
+   * The workspace's agent runs, newest first. `status` keeps those in that
+   * state, `model` one model's runs, and `since` / `until` those made from /
+   * before a date or date-time. An invalid Date throws a TypeError on the
+   * first iteration, before any request is made.
+   */
+  async *agentRuns(opts: AgentRunsOptions = {}): AsyncGenerator<AgentSummary> {
+    const filters = { status: opts.status, model: opts.model, since: isoOf('since', opts.since), until: isoOf('until', opts.until) };
+    yield* paged<AgentSummary>(this, '/agent', { ...filters, limit: opts.limit ?? 25 });
   }
 
   /** The pages of a run (the latest finished run by default). */
@@ -459,6 +507,10 @@ export class MeshArc {
     return this.call('GET', '/me/usage');
   }
 
+  /**
+   * The workspace's job queue: what is queued and running now (GET /me/monitor).
+   * Not `arc.monitors`, the searches and agent requests kept on a schedule.
+   */
   monitor(): Promise<Json> {
     return this.call('GET', '/me/monitor');
   }
@@ -513,6 +565,10 @@ export interface WebSearchOptions extends WaitOptions {
   country?: string;
   /** Language of the results. */
   lang?: string;
+  /** Read the engines' news results instead of the web ones; each carries its publisher and age. */
+  news?: boolean;
+  /** Which results page, 1 to 10: page 2 is results 11 to 20. Each page is its own search. */
+  page?: number;
   /** Only results published within this period. */
   freshness?: 'hour' | 'day' | 'week' | 'month' | 'year';
   /** Keep only results from these domains (20 at most). */
@@ -535,11 +591,18 @@ export interface WebSearchHit extends Json {
   url: string;
   title: string;
   snippet: string;
-  /** The kind of result: `web` for an organic result. */
+  /** The kind of result: `web` for an organic result, `news` for a news one. */
   source: string;
   engine: string;
-  /** The result's page when the search scraped it; `{ url, status: 'pending' | 'expired' }` until it lands or after it is gone. */
-  page?: Json;
+  /** A news result: who published it. */
+  publisher?: string | null;
+  /** A news result: how old it is, as the engine put it ("20h"). */
+  age?: string | null;
+  /**
+   * The result's page when the search scraped it; `{ url, status: 'pending' | 'expired' }` until it
+   * lands or after it is gone; null or absent when the search did not scrape.
+   */
+  page?: Json | null;
 }
 
 /** One engine's try at the results page. */
@@ -593,6 +656,286 @@ export interface SearchSummary extends Json {
   error: string;
   createdAt: string | null;
   finishedAt: string | null;
+}
+
+export interface AgentOptions {
+  /** Pages to start from (20 at most). */
+  urls?: string[];
+  /** A JSON Schema whose type is "object" or "array"; the answer under `data` matches it. */
+  schema?: Json;
+  /** The most credits the run may spend, 1 to 100 000 (2000 by default). */
+  maxCredits?: number;
+  /** The most steps the run may take, 1 to 100 (40 by default). */
+  maxSteps?: number;
+  /** Read only pages on these domains (20 at most). */
+  allowedDomains?: string[];
+  /**
+   * Be told of the run's life: a URL, or `{ url, events, metadata }` with events from
+   * agent.started, agent.action, agent.completed, agent.failed and agent.cancelled (all
+   * five by default). The secret its messages are signed with is `run.webhookSecret`, once.
+   */
+  webhook?: WebhookSpec;
+  /**
+   * One of the workspace's LLM connections: the run uses that model, on the workspace's
+   * own key, and its tokens cost 1 credit per 1,000.
+   */
+  connectionId?: string;
+  /** Seconds the API holds the request open for the answer (none by default, 120 at most). */
+  apiTimeoutS?: number;
+  /** The same key within 24 hours returns the first answer rather than starting a second run. */
+  idempotencyKey?: string;
+}
+
+/** Where to send a job's webhook messages: a URL, or the URL with the events wanted and metadata echoed back. */
+export type WebhookSpec = string | { url: string; events?: string[]; metadata?: Json };
+
+/** What `AgentRun.continue` gives the new run; the stopped run's own values when left out. */
+export interface AgentContinueOptions {
+  /** The new run's budget, 1 to 100 000. */
+  maxCredits?: number;
+  /** The new run's step limit, 1 to 100. */
+  maxSteps?: number;
+  /** Seconds the API holds the request open for the answer (none by default, 120 at most). */
+  apiTimeoutS?: number;
+  /** The same key within 24 hours returns the first answer rather than starting a second run. */
+  idempotencyKey?: string;
+}
+
+/** Where an agent run stands; `expired` once its answer is past its keep date. */
+export type AgentStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'credit_limit' | 'expired';
+
+/** What `agentRuns` keeps. */
+export interface AgentRunsOptions {
+  /** Only the runs in this status. */
+  status?: AgentStatus;
+  /** One model's runs, by the name runs show it under, e.g. `openai:gpt-5.4-mini`. */
+  model?: string;
+  /**
+   * Runs made from this date or date-time on (ISO 8601; a Date is sent as its ISO string,
+   * and an invalid Date throws a TypeError before any request).
+   */
+  since?: string | Date;
+  /** Runs made before this date or date-time (ISO 8601; a Date as for `since`). */
+  until?: string | Date;
+  /** Runs per page. */
+  limit?: number;
+}
+
+/** A page the agent's answer drew on. */
+export interface AgentSource extends Json {
+  url: string;
+  title: string;
+  /** The stored page it was read from; '' when there is none. */
+  pageId: string;
+}
+
+/** The page one value of a schema answer came from. */
+export interface AgentFieldSource extends Json {
+  url: string;
+  pageId: string;
+}
+
+/** An agent run: its status while it works, its answer and sources after. */
+export interface AgentEnvelope extends Json {
+  id: string;
+  kind: 'agent';
+  /** queued, running, done, error, cancelled, credit_limit, or expired once its answer is gone. */
+  status: string;
+  prompt: string;
+  params: Json;
+  /** The answer: JSON matching the schema, `{ text }` without one, `{ partial }` at credit_limit. */
+  data: unknown;
+  /**
+   * Where each value of a schema answer came from: its path in `data` ("plans[0].price",
+   * or "[2].name" for a list answer) to the page that said it.
+   */
+  fieldSources?: Record<string, AgentFieldSource>;
+  sources: AgentSource[];
+  creditsUsed: number;
+  /** The most this run may spend: maxCredits, or less when the workspace had less left (budgetLimited). */
+  budget: number;
+  budgetLimited: boolean;
+  tokens: { in: number; out: number };
+  steps: number;
+  model: string;
+  /** Runs carried on from one another share a thread. */
+  threadId: string;
+  /** The run this one carried on (`AgentRun.continue`); null for a first run. */
+  continuesRunId?: string | null;
+  /** The run that carried this one on, whose answer replaces this one's partial; null until one does. */
+  continuedBy?: string | null;
+  stopReason: string;
+  /** Empty when there is no error. */
+  error: string;
+  /** The URL to poll while the run works; null once it is finished. */
+  next: string | null;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  expiresAt: string | null;
+  request_id: string;
+  /** Only on the answer to the POST that set a webhook: the secret its messages are signed with. */
+  webhookSecret?: string | null;
+}
+
+/** One step of an agent run's trace. */
+export interface AgentEvent extends Json {
+  seq: number;
+  t: string | null;
+  /** start, resume, continue, model, search, fetch, render, map, select, extract, tool, busy or finish. */
+  kind: string;
+  text: string;
+  [field: string]: unknown;
+}
+
+/** One page of an agent run's trace; `last` is the seq to pass as `after` next. */
+export interface AgentTrace extends Json {
+  data: AgentEvent[];
+  last: number;
+}
+
+/** One line of the agent run history. */
+export interface AgentSummary extends Json {
+  id: string;
+  prompt: string;
+  status: string;
+  model: string;
+  steps: number;
+  /** Runs carried on from one another share a thread. */
+  threadId: string;
+  continuesRunId?: string | null;
+  continuedBy?: string | null;
+  creditsUsed: number;
+  error: string;
+  createdAt: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** What a monitor re-runs: a web search or an agent request. */
+export type MonitorKind = 'search' | 'agent';
+
+/** How often a monitor runs. */
+export type MonitorSchedule = 'hourly' | 'daily' | 'weekly';
+
+/**
+ * What a search monitor runs: the body of a POST /search, by the API's own names. A news
+ * monitor is `sources: ['news']`. There is no `scrape`: a monitored search reads its results
+ * page only.
+ */
+export interface SearchMonitorRequest {
+  query: string;
+  /** How many results to read, 1 to 10. */
+  limit?: number;
+  /** `['web']` (the default) or `['news']`. */
+  sources?: ('web' | 'news')[];
+  /** Which results page, 1 to 10: page 2 is results 11 to 20. */
+  page?: number;
+  /** Two-letter country code the results are for. */
+  country?: string;
+  /** Language of the results. */
+  lang?: string;
+  /** Only results published within this period. */
+  freshness?: 'hour' | 'day' | 'week' | 'month' | 'year';
+  /** Keep only results from these domains (20 at most). */
+  includeDomains?: string[];
+  /** Drop results from these domains (20 at most). */
+  excludeDomains?: string[];
+}
+
+/** What an agent monitor runs: the body of a POST /agent, by the API's own names. */
+export interface AgentMonitorRequest {
+  prompt: string;
+  /** Pages to start from (20 at most). */
+  urls?: string[];
+  /** A JSON Schema whose type is "object" or "array"; each run's answer matches it. */
+  schema?: Json;
+  /** The most credits one run may spend, 1 to 100 000 (2000 by default). */
+  maxCredits?: number;
+  /** The most steps one run may take, 1 to 100 (40 by default). */
+  maxSteps?: number;
+  /** Read only pages on these domains (20 at most). */
+  allowedDomains?: string[];
+  /** One of the workspace's LLM connections, to run on its model and key. */
+  connectionId?: string;
+}
+
+export interface CreateMonitorOptions {
+  /** The query or prompt when left out; at most 120 characters. */
+  name?: string;
+  /**
+   * Be told when a run's results changed: a URL, or `{ url, events, metadata }` with
+   * `search.changed` for a search monitor, `agent.changed` for an agent one. The secret
+   * its messages are signed with is in the answer once, as `webhookSecret`.
+   */
+  webhook?: WebhookSpec;
+  /**
+   * A finished search or agent run with the same request: the first run, not paid for again.
+   * A search baseline's `limit` must be at least the monitor's.
+   */
+  baselineId?: string;
+  /** The same key within 24 hours returns the first answer rather than making a second monitor. */
+  idempotencyKey?: string;
+}
+
+/** What `monitors.update` changes; what is left out stays as it is. */
+export interface MonitorUpdate {
+  /** At most 120 characters. */
+  name?: string;
+  schedule?: MonitorSchedule;
+  /** `paused` stops the scheduled runs; `active` starts them again. */
+  status?: 'active' | 'paused';
+  /** A new webhook (with a new secret, in the answer once), or '' for none. */
+  webhook?: WebhookSpec | '';
+}
+
+/** One run of a monitor: the search or agent run it made, and what changed since the last one that answered. */
+export interface MonitorRun extends Json {
+  id: string;
+  monitorId: string;
+  kind: MonitorKind;
+  /** first, baseline, scheduled or manual. */
+  trigger: string;
+  /** running; then the search's or agent run's own status (done, blocked, error, credit_limit, cancelled), or skipped (no credits left). */
+  status: string;
+  /** The search or agent run this run made: `getSearch(refId)` or `getAgent(refId)`. */
+  refId: string;
+  credits: number;
+  /** False when it did not answer: it is kept, and nothing is compared with it. */
+  answered: boolean;
+  changed: boolean;
+  /** One line on what changed. */
+  summary: string;
+  /**
+   * The comparison: for a search `{ baseline, withheld, comparable, new, dropped, moved, changed, summary }`,
+   * for an agent run `{ baseline, withheld, changed, counts, changes, summary }`; null until the run has
+   * finished. `withheld` is a reason string, '' when the run answered and was compared.
+   */
+  diff: Json | null;
+  /** Empty when there is no error. */
+  error: string;
+  createdAt: string | null;
+  finishedAt: string | null;
+}
+
+/** A search or agent request kept and run on a schedule. */
+export interface Monitor extends Json {
+  id: string;
+  kind: MonitorKind;
+  name: string;
+  /** The POST /search or POST /agent body it runs, as the API cleaned it. */
+  request: Json;
+  schedule: MonitorSchedule;
+  status: 'active' | 'paused';
+  /** Where `search.changed` / `agent.changed` go; never the secret. */
+  webhook: { url: string; events: string[] } | null;
+  /** Null while it is paused. */
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastRun: MonitorRun | null;
+  createdAt: string | null;
+  /** Only on the answer that set the webhook: the secret its messages are signed with. */
+  webhookSecret?: string | null;
 }
 
 /**
@@ -681,6 +1024,92 @@ export class Runs {
 }
 
 /**
+ * Web searches and agent requests kept and run on a schedule: `arc.monitors`.
+ * Each run is compared with the last one that answered, and a webhook hears
+ * when something changed. Not `arc.monitor()`, the job queue.
+ */
+export class Monitors {
+  constructor(private readonly client: MeshArc) {}
+
+  /**
+   * Keep a web search or an agent request and run it hourly, daily or weekly.
+   * `request` is the body of a POST /search or POST /agent by the API's own
+   * names: a news monitor is `{ query, sources: ['news'] }`, and a monitored
+   * search reads its results page only, so it takes no `scrape`.
+   *
+   * Needs a key that can write. Each run is an ordinary search or agent run
+   * and is charged as one. The first run is `baselineId` (a finished search
+   * or agent run with the same request, not paid for again; a search
+   * baseline's `limit` must be at least the monitor's) or starts now. A
+   * `webhook` hears `search.changed` / `agent.changed` when a run found
+   * something different; its signing secret is in the answer once, as
+   * `webhookSecret`.
+   */
+  create(kind: 'search', request: SearchMonitorRequest, schedule: MonitorSchedule, opts?: CreateMonitorOptions): Promise<Monitor>;
+  create(kind: 'agent', request: AgentMonitorRequest, schedule: MonitorSchedule, opts?: CreateMonitorOptions): Promise<Monitor>;
+  create(kind: MonitorKind, request: SearchMonitorRequest | AgentMonitorRequest, schedule: MonitorSchedule,
+    opts: CreateMonitorOptions = {}): Promise<Monitor> {
+    const body: Json = { kind, request, schedule };
+    if (opts.name !== undefined) body.name = opts.name;
+    if (opts.webhook !== undefined) body.webhook = opts.webhook;
+    if (opts.baselineId !== undefined) body.baselineId = opts.baselineId;
+    return this.client.call<Monitor>('POST', '/monitors', body, undefined, opts.idempotencyKey);
+  }
+
+  /** The workspace's monitors, newest first, each with its last run; `kind` keeps the search or the agent ones. */
+  async list(opts: { kind?: MonitorKind } = {}): Promise<Monitor[]> {
+    return (await this.client.call<{ data: Monitor[] }>('GET', '/monitors', undefined, { kind: opts.kind })).data;
+  }
+
+  /** One monitor, with its last run. */
+  get(monitorId: string): Promise<Monitor> {
+    return this.client.call<Monitor>('GET', `/monitors/${seg(monitorId)}`);
+  }
+
+  /**
+   * Change a monitor's name, schedule, status or webhook. A new webhook's
+   * signing secret is in the answer once, as `webhookSecret`; `webhook: ''`
+   * removes it.
+   */
+  update(monitorId: string, fields: MonitorUpdate): Promise<Monitor> {
+    return this.client.call<Monitor>('PATCH', `/monitors/${seg(monitorId)}`, fields);
+  }
+
+  /** No more scheduled runs until it is resumed; a run under way finishes. */
+  pause(monitorId: string): Promise<Monitor> {
+    return this.client.call<Monitor>('POST', `/monitors/${seg(monitorId)}/pause`);
+  }
+
+  /** Scheduled again, from its last run: a slot that passed while it was paused runs once. */
+  resume(monitorId: string): Promise<Monitor> {
+    return this.client.call<Monitor>('POST', `/monitors/${seg(monitorId)}/resume`);
+  }
+
+  /**
+   * Run a monitor now, paused or not; the schedule counts on from this run.
+   * Resolves to the run as it starts. While one is under way the API refuses
+   * with MeshArcError 409 'conflict'; when the workspace's credits are spent,
+   * 402 'credits_exhausted'.
+   */
+  run(monitorId: string, opts: { idempotencyKey?: string } = {}): Promise<MonitorRun> {
+    return this.client.call<MonitorRun>('POST', `/monitors/${seg(monitorId)}/run`, undefined, undefined, opts.idempotencyKey);
+  }
+
+  /** A monitor's runs, newest first, each with what changed since the run before that answered. */
+  async *runs(monitorId: string, opts: { limit?: number } = {}): AsyncGenerator<MonitorRun> {
+    yield* paged<MonitorRun>(this.client, `/monitors/${seg(monitorId)}/runs`, { limit: opts.limit ?? 25 });
+  }
+
+  /**
+   * Delete a monitor and its runs. The searches and agent runs it made stay
+   * in the workspace's history; an agent run it has under way is stopped.
+   */
+  delete(monitorId: string): Promise<{ id: string; deleted: boolean }> {
+    return this.client.call<{ id: string; deleted: boolean }>('DELETE', `/monitors/${seg(monitorId)}`);
+  }
+}
+
+/**
  * A crawl started by `arc.crawl(url)`: a handle on a running job.
  *
  * `wait()` blocks until it finishes; `pages()` yields pages as they land,
@@ -764,6 +1193,159 @@ export class Crawl {
 }
 
 /**
+ * An agent run started by `arc.agent(prompt)`: a handle on the run.
+ *
+ * `wait()` blocks until it finishes; `trace()` yields its steps as they
+ * happen; `cancel()` asks it to stop; `continue()` carries on a run that
+ * stopped at its credit limit.
+ */
+export class AgentRun {
+  readonly id: string;
+  /**
+   * Returned once, at creation: the secret the run's webhook messages are signed with. A
+   * continuation keeps the webhook and this secret, so `continue()`'s handle carries it on.
+   */
+  readonly webhookSecret: string;
+  /** The run as the API last described it. */
+  envelope: AgentEnvelope;
+
+  /** `webhookSecret` is the secret to keep when the envelope carries none (a continuation's). */
+  constructor(private readonly client: MeshArc, envelope: AgentEnvelope, webhookSecret = '') {
+    this.id = envelope.id;
+    this.webhookSecret = envelope.webhookSecret || webhookSecret;
+    this.envelope = envelope;
+  }
+
+  get status(): string {
+    return this.envelope.status ?? 'queued';
+  }
+
+  /** The answer: JSON matching the schema, `{ text }` without one, `{ partial }` at credit_limit. */
+  get data(): unknown {
+    return this.envelope.data;
+  }
+
+  get sources(): AgentSource[] {
+    return this.envelope.sources ?? [];
+  }
+
+  /** Where each value of a schema answer came from, by its path in `data` ("plans[0].price"). */
+  get fieldSources(): Record<string, AgentFieldSource> {
+    return this.envelope.fieldSources ?? {};
+  }
+
+  /** The run this one carried on; null for a first run. */
+  get continuesRunId(): string | null {
+    return this.envelope.continuesRunId ?? null;
+  }
+
+  /** The run that carried this one on; null until one does. */
+  get continuedBy(): string | null {
+    return this.envelope.continuedBy ?? null;
+  }
+
+  /** The run as it stands now. */
+  async refresh(): Promise<this> {
+    this.envelope = await this.client.call<AgentEnvelope>('GET', `/agent/${seg(this.id)}`);
+    return this;
+  }
+
+  /**
+   * Resolves to the envelope once the run is done, cancelled or stopped at
+   * its credit limit; a run that failed throws MeshArcError 502 'job_failed'.
+   */
+  async wait(opts: WaitOptions = {}): Promise<AgentEnvelope> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 3_600_000);
+    for (;;) {
+      const e = this.envelope;
+      if (e.status === 'done' || e.status === 'credit_limit' || e.status === 'cancelled') return e;
+      if (!isRunning(e.status)) throw new MeshArcError(502, e.error || `agent ${e.status}`, 'job_failed');
+      if (Date.now() > deadline) throw new MeshArcTimeoutError(`agent ${this.id} is still ${e.status}`, this.id);
+      await sleep(opts.pollMs ?? 2000);
+      await this.client.pace();
+      await this.refresh();
+    }
+  }
+
+  /**
+   * Ask the run to stop. Resolves to the API's answer: 'cancelled' for a
+   * queued run, 'cancelling' for a running one (it stops before its next
+   * step), or a finished run's final status. `envelope` is left as it was;
+   * `refresh()` reads the outcome.
+   */
+  cancel(): Promise<{ id: string; status: string }> {
+    return this.client.call<{ id: string; status: string }>('DELETE', `/agent/${seg(this.id)}`);
+  }
+
+  /**
+   * Carry on a run that stopped at its credit limit, with a new budget.
+   * Resolves to a handle on the new run: on the same thread, it resumes from
+   * where this one was, keeps the pages it read (not paid for again) and
+   * answers in full. `maxCredits` and `maxSteps` are this run's when left
+   * out. `envelope` is left as it was; `refresh()` reads `continuedBy`. The
+   * new run posts to this run's webhook, signed with the same secret, so the
+   * new handle keeps this one's `webhookSecret`.
+   *
+   * A run that did not stop at its limit, was already continued or has no
+   * saved progress throws MeshArcError 409 'conflict'; one past its keep
+   * date, 410 'expired'; one whose LLM connection can no longer be used, 400.
+   */
+  async continue(opts: AgentContinueOptions = {}): Promise<AgentRun> {
+    const body: Json = {};
+    if (opts.maxCredits !== undefined) body.maxCredits = opts.maxCredits;
+    if (opts.maxSteps !== undefined) body.maxSteps = opts.maxSteps;
+    if (opts.apiTimeoutS !== undefined && opts.apiTimeoutS > 0) body.timeout = Math.min(opts.apiTimeoutS, 120);
+    const next = await this.client.call<AgentEnvelope>('POST', `/agent/${seg(this.id)}/continue`, body, undefined, opts.idempotencyKey);
+    return new AgentRun(this.client, next, this.webhookSecret);
+  }
+
+  /**
+   * The run's steps, oldest first, from after the seq `after`. While the run
+   * works this waits for more steps rather than stopping; `follow: false`
+   * returns what exists. Ends quietly once the run's trace has expired.
+   */
+  async *trace(opts: { after?: number; follow?: boolean; pollMs?: number; timeoutMs?: number } = {}): AsyncGenerator<AgentEvent> {
+    const follow = opts.follow ?? true;
+    const deadline = Date.now() + (opts.timeoutMs ?? 3_600_000);
+    let after = opts.after ?? 0;
+    for (;;) {
+      // The status is read before the trace, so the steps a run wrote as it finished are still drained.
+      let live = false;
+      if (follow) {
+        try {
+          live = isRunning((await this.refresh()).status);
+        } catch (err) {
+          if (isGone(err)) return;
+          throw err;
+        }
+      }
+      for (;;) {
+        let page: AgentTrace;
+        try {
+          page = await this.client.call<AgentTrace>('GET', `/agent/${seg(this.id)}/trace`, undefined, { after, limit: 500 });
+        } catch (err) {
+          if (isGone(err)) return;
+          throw err;
+        }
+        for (const event of page.data) yield event;
+        const moved = typeof page.last === 'number' && page.last > after;
+        if (moved) after = page.last;
+        if (page.data.length < 500 || !moved) break;
+      }
+      if (!live) return;
+      if (Date.now() > deadline) throw new MeshArcTimeoutError(`agent ${this.id} is still ${this.status}`, this.id);
+      await sleep(opts.pollMs ?? 2000);
+      await this.client.pace();
+    }
+  }
+}
+
+/** A 410: the run is past its keep date. */
+function isGone(err: unknown): boolean {
+  return err instanceof MeshArcError && err.status === 410;
+}
+
+/**
  * The API base, ending in /api/v1. The key only travels over HTTPS: a plain
  * http:// base is refused unless it points at this machine, so a poisoned
  * MESHARC_API_URL cannot quietly send the key somewhere else in clear text.
@@ -818,6 +1400,31 @@ async function errorFrom(res: Response): Promise<MeshArcError> {
     // Not JSON; the text is the detail.
   }
   return new MeshArcError(res.status, detail, code, requestId);
+}
+
+/**
+ * A date filter as the API reads it: a Date as its ISO string, a string as given. An invalid
+ * Date throws a TypeError naming the filter, rather than the RangeError toISOString throws.
+ */
+function isoOf(name: string, value: string | Date | undefined): string | undefined {
+  if (!(value instanceof Date)) return value;
+  if (Number.isNaN(value.getTime())) throw new TypeError(`${name}: an invalid Date`);
+  return value.toISOString();
+}
+
+/**
+ * Every row of a cursor-paged list, page by page: `params` on every request,
+ * and the cursor from each page's `next` until there is none.
+ */
+async function* paged<T>(client: MeshArc, path: string, params: Params): AsyncGenerator<T> {
+  let cursor: string | undefined;
+  for (;;) {
+    const page = await client.call<{ data: T[]; next?: string | null }>('GET', path, undefined, { ...params, cursor });
+    for (const row of page.data) yield row;
+    if (!page.next) return;
+    cursor = cursorOf(page.next);
+    if (cursor === undefined) return;
+  }
 }
 
 function cursorOf(next: string): string | undefined {
