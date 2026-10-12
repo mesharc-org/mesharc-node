@@ -425,6 +425,16 @@ export class MeshArc {
   }
 
   /**
+   * Stop an agent run by its id, with no handle needed: what `run.cancel()`
+   * does, in one request. Resolves to `{ id, status }`: 'cancelled' for a
+   * queued run, 'cancelling' for a running one (it stops before its next
+   * step), or a finished run's own status. What it used stays charged.
+   */
+  cancelAgent(runId: string): Promise<{ id: string; status: string }> {
+    return this.call<{ id: string; status: string }>('DELETE', `/agent/${seg(runId)}`);
+  }
+
+  /**
    * The workspace's agent runs, newest first. `status` keeps those in that
    * state, `model` one model's runs, and `since` / `until` those made from /
    * before a date or date-time. An invalid Date throws a TypeError on the
@@ -1274,7 +1284,7 @@ export class AgentRun {
    * `refresh()` reads the outcome.
    */
   cancel(): Promise<{ id: string; status: string }> {
-    return this.client.call<{ id: string; status: string }>('DELETE', `/agent/${seg(this.id)}`);
+    return this.client.cancelAgent(this.id);
   }
 
   /**

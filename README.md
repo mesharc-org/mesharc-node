@@ -210,7 +210,7 @@ for await (const step of run.trace()) console.log(step.seq, step.kind, step.text
 const { status } = await run.cancel();   // 'cancelled' if it was queued, 'cancelling' if it was running
 ```
 
-`trace()` yields the run's steps (`start`, `model`, `search`, `fetch`, …) oldest first and ends when the run does; `{ follow: false }` returns what exists, `{ after: seq }` starts later. A running run stops before its next step, and what it already used stays charged; `cancel()` leaves `run.envelope` as it was, so `refresh()` reads the outcome.
+`trace()` yields the run's steps (`start`, `model`, `search`, `fetch`, …) oldest first and ends when the run does; `{ follow: false }` returns what exists, `{ after: seq }` starts later. A running run stops before its next step, and what it already used stays charged; `cancel()` leaves `run.envelope` as it was, so `refresh()` reads the outcome. `arc.cancelAgent(id)` stops a run by its id, with no handle needed.
 
 ```ts
 for await (const r of arc.agentRuns({ status: 'done', limit: 50 })) console.log(r.id, r.prompt, r.steps, r.creditsUsed);

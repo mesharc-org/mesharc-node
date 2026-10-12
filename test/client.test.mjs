@@ -400,6 +400,14 @@ test('AgentRun.wait past timeoutMs throws MeshArcTimeoutError naming the run', a
   });
 });
 
+test('cancelAgent stops a run by its id in one DELETE, with no read first', async () => {
+  const { arc, calls } = client([{ body: { id: 'a12', status: 'cancelled' } }]);
+  assert.deepEqual(await arc.cancelAgent('a12'), { id: 'a12', status: 'cancelled' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'DELETE');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/agent/a12');
+});
+
 test('AgentRun.cancel sends DELETE, resolves the API answer and leaves the envelope as it was', async () => {
   const { arc, calls } = client([
     { status: 202, body: agentRun('a11', 'running') },
