@@ -155,7 +155,7 @@ const news = await arc.webSearch('mesharc', { news: true, page: 2 });   // the n
 for (const hit of news.data) console.log(hit.position, hit.publisher, hit.age, hit.title);   // 11 'The Paper' '20h' …
 ```
 
-`news: true` reads the engines' news results instead of the web ones (`source: 'news'`), each with its `publisher` and `age` as the engine put it. `page` (1 to 10) reads further in: page 2 is results 11 to 20, and each page is its own search. `news` and `page` need an API with those features: they are on the API's feature branch, not yet on mesharc.dev.
+`news: true` reads the engines' news results instead of the web ones (`source: 'news'`), each with its `publisher` and `age` as the engine put it. `page` (1 to 10) reads further in: page 2 is results 11 to 20, and each page is its own search.
 
 ```ts
 for await (const s of arc.searches({ q: 'retry', limit: 50 })) console.log(s.id, s.query, s.status, s.resultCount, s.creditsUsed);
@@ -169,7 +169,7 @@ A web search needs a key that can write, and spends credits. A results page ever
 
 ## Asking the agent
 
-The agent takes a prompt, searches, reads pages and answers. It needs an API with the `/agent` route, which is not live on mesharc.dev yet (web search is). Its `webhook`, `connectionId`, `continue()` and `fieldSources` need an API with those features too: they are on the API's feature branch, not yet on mesharc.dev.
+The agent takes a prompt, searches, reads pages and answers. It needs a key that can write. A deployment that runs no agents refuses a run with status 501.
 
 ```ts
 const run = await arc.agent('Which plans does example.com offer, and at what price?', {
@@ -223,7 +223,7 @@ An agent run needs a key that can write. It is charged each page as it reads it 
 
 ## Monitors: a search or a question, asked again on a schedule
 
-A monitor keeps a web search or an agent request and runs it hourly, daily or weekly; each run is compared with the last one that answered, and a webhook hears when something changed. Monitors need an API with the `/monitors` route: it is on the API's feature branch, not yet on mesharc.dev.
+A monitor keeps a web search or an agent request and runs it hourly, daily or weekly; each run is compared with the last one that answered, and a webhook hears when something changed. Monitors need a key that can write; an agent monitor also needs a deployment that runs agents.
 
 ```ts
 const mon = await arc.monitors.create('search', { query: 'mesharc', sources: ['news'] }, 'daily', {

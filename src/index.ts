@@ -10,7 +10,7 @@
  * https://mesharc.dev/docs/api applies to every return value.
  */
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.6.0';
 
 const DEFAULT_BASE = 'https://api.mesharc.dev';
 const DEFAULT_TIMEOUT_MS = 150_000;
