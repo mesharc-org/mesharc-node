@@ -16,6 +16,8 @@ const DEFAULT_BASE = 'https://api.mesharc.dev';
 const DEFAULT_TIMEOUT_MS = 150_000;
 const DEFAULT_MAX_RETRIES = 2;
 const RETRY_STATUSES = new Set([429, 502, 503, 504]);
+/** The header that makes a request act on one of the key's workspace's sub-accounts. */
+export const TENANT_HEADER = 'X-MeshArc-Tenant';
 
 /** A request the API refused, or a response that was not a page. */
 export class MeshArcError extends Error {
@@ -74,6 +76,11 @@ export interface MeshArcOptions {
    * local API on localhost.
    */
   baseUrl?: string;
+  /**
+   * The id of one of the workspace's sub-accounts: every request then acts on it
+   * (`asSubAccount` makes such a client from this one).
+   */
+  tenant?: string;
 }
 
 export type Json = Record<string, unknown>;
@@ -106,6 +113,20 @@ export class MeshArc {
   readonly runs: Runs;
   /** Web searches and agent requests kept and run on a schedule. Not `monitor()`, the job queue. */
   readonly monitors: Monitors;
+  /** The agent over every row of a table. */
+  readonly agentBatches: AgentBatches;
+  /** A change or a new result starts work. */
+  readonly triggers: Triggers;
+  /** What agents proposed to watch, for a member to approve. */
+  readonly proposals: Proposals;
+  /** Workspaces this one makes for its own customers. */
+  readonly subAccounts: SubAccounts;
+  /** The workspace's connections: destinations, models and data providers. */
+  readonly connections: Connections;
+  /** The workspace's saved logins. */
+  readonly logins: Logins;
+  /** The sub-account every request acts on; '' for the key's own workspace. */
+  readonly tenant: string;
 
   readonly #key: string;
   private readonly base: string;
@@ -130,9 +151,30 @@ export class MeshArc {
     if (typeof this.fetchImpl !== 'function') throw new Error('No fetch available: use Node 18+ or pass { fetch }.');
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.tenant = options.tenant ?? '';
     this.projects = new Projects(this);
     this.runs = new Runs(this);
     this.monitors = new Monitors(this);
+    this.agentBatches = new AgentBatches(this);
+    this.triggers = new Triggers(this);
+    this.proposals = new Proposals(this);
+    this.subAccounts = new SubAccounts(this);
+    this.connections = new Connections(this);
+    this.logins = new Logins(this);
+  }
+
+  /**
+   * A client on the same key that acts on one of this workspace's
+   * sub-accounts: each request carries `X-MeshArc-Tenant` and is the
+   * sub-account's, with the key's own scopes and rate limit. Only a key of
+   * the sub-account's parent, not held to some projects, may do this; any
+   * other id is a 404. Each use is logged.
+   */
+  asSubAccount(subAccountId: string): MeshArc {
+    return new MeshArc(this.#key, {
+      baseUrl: this.base.replace(/\/api\/v1$/, ''), fetch: this.fetchImpl, timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries, tenant: subAccountId,
+    });
   }
 
   /** What console.log and util.inspect show: the key is never printed. */
@@ -192,6 +234,7 @@ export class MeshArc {
     };
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
+    if (this.tenant) headers[TENANT_HEADER] = this.tenant;
     const payload = body !== undefined ? JSON.stringify(body) : undefined;
     // A GET or DELETE is safe to repeat; a POST only when it carries an idempotency key.
     const repeatable = method === 'GET' || method === 'DELETE' || !!idempotencyKey;
@@ -403,16 +446,31 @@ export class MeshArc {
    * `webhook`, its signing secret is `run.webhookSecret`, once.
    */
   async agent(prompt: string, opts: AgentOptions = {}): Promise<AgentRun> {
-    const body: Json = { prompt };
-    if (opts.urls !== undefined) body.urls = opts.urls;
-    if (opts.schema !== undefined) body.schema = opts.schema;
-    if (opts.maxCredits !== undefined) body.maxCredits = opts.maxCredits;
-    if (opts.maxSteps !== undefined) body.maxSteps = opts.maxSteps;
-    if (opts.allowedDomains !== undefined) body.allowedDomains = opts.allowedDomains;
-    if (opts.webhook !== undefined) body.webhook = opts.webhook;
-    if (opts.connectionId !== undefined) body.connectionId = opts.connectionId;
-    if (opts.apiTimeoutS !== undefined && opts.apiTimeoutS > 0) body.timeout = Math.min(opts.apiTimeoutS, 120);
-    return new AgentRun(this, await this.call<AgentEnvelope>('POST', '/agent', body, undefined, opts.idempotencyKey));
+    return new AgentRun(this, await this.call<AgentEnvelope>('POST', '/agent', agentBody(prompt, opts), undefined, opts.idempotencyKey));
+  }
+
+  /**
+   * The workspace's agent conversations, the latest message first, each
+   * `{ id, title, messages, status, lastRunId, creditsUsed, ... }`; `q` keeps
+   * those whose first question holds it. A table's rows are not listed.
+   */
+  async *conversations(opts: { q?: string; limit?: number } = {}): AsyncGenerator<Json> {
+    yield* paged<Json>(this, '/agent/conversations', { q: opts.q, limit: opts.limit ?? 25 });
+  }
+
+  /** One conversation with every run in it, oldest first under `runs`. 410 past its keep date. */
+  conversation(threadId: string): Promise<Json> {
+    return this.call('GET', `/agent/conversations/${seg(threadId)}`);
+  }
+
+  /**
+   * About how many credits scheduled work costs a month, before it is saved:
+   * a 'crawl' (`projectId`, or `maxPages` and `maxTier` for one not made yet),
+   * a 'search' or an 'agent' (`monitorId`, or `maxCredits`), held to `monthCap`.
+   * `upTo` says the figure is the most a run could cost, nothing having run yet.
+   */
+  estimate(kind: 'crawl' | 'search' | 'agent', schedule: MonitorSchedule | 'manual', opts: EstimateOptions = {}): Promise<Json> {
+    return this.call('GET', '/estimate', undefined, { kind, schedule, ...opts });
   }
 
   /**
@@ -694,6 +752,37 @@ export interface AgentOptions {
   apiTimeoutS?: number;
   /** The same key within 24 hours returns the first answer rather than starting a second run. */
   idempotencyKey?: string;
+  /** A saved login: pages on its site are read signed in, every other site signed out. */
+  loginId?: string;
+  /**
+   * Up to two of the workspace's data-provider connections, one per provider (People Data
+   * Labs, Financial Modeling Prep): the agent may look up company and financial data on
+   * your own key, at no MeshArc credits, each record one of its sources.
+   */
+  dataConnections?: string[];
+  /** It may propose things to watch, which wait in `arc.proposals` for a member to approve. */
+  proposals?: boolean;
+}
+
+/** What `estimate` is told about the work; the API's own names. */
+export interface EstimateOptions {
+  projectId?: string;
+  monitorId?: string;
+  maxPages?: number;
+  maxTier?: string;
+  maxCredits?: number;
+  monthCap?: number;
+}
+
+/** A POST /agent body (and a follow-up's) in the API's own names, naming only what was given. */
+function agentBody(prompt: string, opts: AgentOptions): Json {
+  const body: Json = { prompt };
+  for (const k of ['urls', 'schema', 'maxCredits', 'maxSteps', 'allowedDomains', 'webhook', 'connectionId', 'loginId',
+    'dataConnections', 'proposals'] as const) {
+    if (opts[k] !== undefined) body[k] = opts[k];
+  }
+  if (opts.apiTimeoutS !== undefined && opts.apiTimeoutS > 0) body.timeout = Math.min(opts.apiTimeoutS, 120);
+  return body;
 }
 
 /** Where to send a job's webhook messages: a URL, or the URL with the events wanted and metadata echoed back. */
@@ -731,12 +820,14 @@ export interface AgentRunsOptions {
   limit?: number;
 }
 
-/** A page the agent's answer drew on. */
+/** A page the agent's answer drew on, or a data provider's record. */
 export interface AgentSource extends Json {
   url: string;
   title: string;
   /** The stored page it was read from; '' when there is none. */
   pageId: string;
+  /** A data provider's record (pdl, fmp), not a page: `url` is the request it came from. */
+  provider?: string;
 }
 
 /** The page one value of a schema answer came from. */
@@ -792,7 +883,7 @@ export interface AgentEnvelope extends Json {
 export interface AgentEvent extends Json {
   seq: number;
   t: string | null;
-  /** start, resume, continue, model, search, fetch, render, map, select, extract, tool, busy or finish. */
+  /** start, resume, continue, model, search, fetch, render, map, select, extract, lookup, propose, tool, busy or finish. */
   kind: string;
   text: string;
   [field: string]: unknown;
@@ -886,6 +977,22 @@ export interface CreateMonitorOptions {
   baselineId?: string;
   /** The same key within 24 hours returns the first answer rather than making a second monitor. */
   idempotencyKey?: string;
+  /**
+   * `{ perRun, perMonth }` in credits, 0 or left out for no cap: perRun lowers an agent
+   * monitor's maxCredits; a run due past perMonth is skipped, and the webhook hears
+   * `budget.reached` once a month.
+   */
+  budget?: { perRun?: number; perMonth?: number };
+  /** `{ email, chatUrl }`: the workspace's run emails, and a Slack / Discord / Teams / Google Chat incoming webhook. */
+  alerts?: { email?: boolean; chatUrl?: string };
+  /** A search monitor's: a project its new results on that project's site are added to. */
+  addToProject?: string;
+  /** An agent monitor's: follow a list answer record by record -- true, or `{ path, key, confirmAfter }`. */
+  rows?: boolean | { path?: string; key?: string; confirmAfter?: number };
+  /** A records monitor's: a destination its records are written to after each run. */
+  destination?: string;
+  /** A news monitor's: `{ connectionId, only }`, each run's new results scored by that LLM connection. */
+  sentiment?: boolean | { connectionId: string; only?: ('positive' | 'neutral' | 'negative')[] };
 }
 
 /** What `monitors.update` changes; what is left out stays as it is. */
@@ -897,6 +1004,41 @@ export interface MonitorUpdate {
   status?: 'active' | 'paused';
   /** A new webhook (with a new secret, in the answer once), or '' for none. */
   webhook?: WebhookSpec | '';
+  /** Replaced whole; `{}` for none. */
+  budget?: { perRun?: number; perMonth?: number };
+  /** Replaced whole; `{}` for none. */
+  alerts?: { email?: boolean; chatUrl?: string };
+  /** A project id, or '' for none. */
+  addToProject?: string;
+  /** A new path or key starts the records again; `{}` or false for none. */
+  rows?: boolean | { path?: string; key?: string; confirmAfter?: number };
+  /** A destination id, or '' for none. */
+  destination?: string;
+  /** Replaced whole; `{}` or false for none. */
+  sentiment?: boolean | Json;
+}
+
+/** A table for `agentBatches.preview` / `start`: the API's own names. */
+export interface AgentBatchRequest {
+  /** The table as CSV text, its first line naming the columns; or `rows`. */
+  csv?: string;
+  /** The table as a list of objects (column -> text, number or boolean). */
+  rows?: Json[];
+  /** The most one row may spend: required by the API. */
+  maxCreditsPerRow?: number;
+  /** Starting URLs as templates: '{{website}}', 'https://{{domain}}/pricing'. */
+  urls?: string[];
+  /** A JSON Schema of type object: its properties are the table's new columns. */
+  schema?: Json;
+  maxSteps?: number;
+  /** Left out, each row is held to its own URLs' sites; [] lifts the limit. */
+  allowedDomains?: string[];
+  /** Rows in flight at once (3 by default). */
+  concurrency?: number;
+  name?: string;
+  connectionId?: string;
+  loginId?: string;
+  dataConnections?: string[];
 }
 
 /** One run of a monitor: the search or agent run it made, and what changed since the last one that answered. */
@@ -1060,9 +1202,10 @@ export class Monitors {
   create(kind: MonitorKind, request: SearchMonitorRequest | AgentMonitorRequest, schedule: MonitorSchedule,
     opts: CreateMonitorOptions = {}): Promise<Monitor> {
     const body: Json = { kind, request, schedule };
-    if (opts.name !== undefined) body.name = opts.name;
-    if (opts.webhook !== undefined) body.webhook = opts.webhook;
-    if (opts.baselineId !== undefined) body.baselineId = opts.baselineId;
+    for (const k of ['name', 'webhook', 'baselineId', 'budget', 'alerts', 'addToProject', 'rows', 'destination',
+      'sentiment'] as const) {
+      if (opts[k] !== undefined) body[k] = opts[k];
+    }
     return this.client.call<Monitor>('POST', '/monitors', body, undefined, opts.idempotencyKey);
   }
 
@@ -1116,6 +1259,300 @@ export class Monitors {
    */
   delete(monitorId: string): Promise<{ id: string; deleted: boolean }> {
     return this.client.call<{ id: string; deleted: boolean }>('DELETE', `/monitors/${seg(monitorId)}`);
+  }
+
+  /**
+   * Everything on a schedule -- projects and monitors -- as the Monitor screen
+   * lists it, with next and last run, this month's spend, an estimate and caps.
+   */
+  overview(opts: { kind?: 'crawl' | MonitorKind } = {}): Promise<Json> {
+    return this.client.call('GET', '/monitors/overview', undefined, { kind: opts.kind });
+  }
+
+  /** One page of an agent monitor's records: `{ data, total }`. */
+  rowsPage(monitorId: string, opts: { active?: boolean; q?: string; offset?: number; limit?: number } = {}): Promise<Json> {
+    return this.client.call('GET', `/monitors/${seg(monitorId)}/rows`, undefined, {
+      active: opts.active === undefined ? undefined : String(opts.active), q: opts.q, offset: opts.offset ?? 0,
+      limit: opts.limit ?? 100,
+    });
+  }
+
+  /**
+   * Every record an agent monitor's answers list, as it stands, with the page
+   * each value was read on. `active: false` lists the records gone.
+   */
+  async *rows(monitorId: string, opts: { active?: boolean; q?: string; limit?: number } = {}): AsyncGenerator<Json> {
+    const limit = opts.limit ?? 100;
+    for (let offset = 0; ;) {
+      const page = await this.rowsPage(monitorId, { ...opts, offset, limit });
+      const rows = (page.data as Json[]) ?? [];
+      for (const row of rows) yield row;
+      if (rows.length < limit) return;
+      offset += rows.length;
+    }
+  }
+
+  /** One record: what it is now, the page each value was read on, and every event that touched it. */
+  row(monitorId: string, key: string): Promise<Json> {
+    return this.client.call('GET', `/monitors/${seg(monitorId)}/rows/${seg(key)}`);
+  }
+
+  /** What moved, newest first: records added, changed (per column, both values), gone and withheld. */
+  async rowEvents(monitorId: string, opts: { runId?: string; kind?: string; limit?: number } = {}): Promise<Json[]> {
+    const out = await this.client.call<{ data: Json[] }>('GET', `/monitors/${seg(monitorId)}/rows/events`, undefined,
+      { run_id: opts.runId, kind: opts.kind, limit: opts.limit ?? 200 });
+    return out.data;
+  }
+
+  /** Its records ('rows') or what moved ('row-events') as a file; resolves to the Response. */
+  exportRows(monitorId: string, opts: { dataset?: 'rows' | 'row-events'; format?: 'csv' | 'jsonl' } = {}): Promise<Response> {
+    return this.client.raw('GET', `/monitors/${seg(monitorId)}/rows/export`, undefined,
+      { dataset: opts.dataset ?? 'rows', format: opts.format ?? 'csv' });
+  }
+}
+
+/**
+ * The agent over every row of a table: `arc.agentBatches`. One agent run a
+ * row, its prompt (and starting URLs) filled from the row's columns as
+ * `{{column}}`, its answer the row's new columns. Each row pays only for what
+ * it uses up to `maxCreditsPerRow`; the batch never spends more than rows x
+ * that cap, or the balance when that is less.
+ */
+export class AgentBatches {
+  constructor(private readonly client: MeshArc) {}
+
+  /** What `start` would do, without starting it or spending anything: the rows that can run, those that cannot and why, and the estimate. */
+  preview(prompt: string, table: AgentBatchRequest): Promise<Json> {
+    return this.client.call('POST', '/agent/batch/preview', { prompt, ...table });
+  }
+
+  /**
+   * Start one agent run a row. Spends credits and needs a key that can write.
+   * A `webhook` hears `agent.batch.finished` once; its secret is in the answer once.
+   */
+  start(prompt: string, table: AgentBatchRequest & { webhook?: WebhookSpec; idempotencyKey?: string }): Promise<Json> {
+    const { idempotencyKey, ...rest } = table;
+    return this.client.call('POST', '/agent/batch', { prompt, ...rest }, undefined, idempotencyKey);
+  }
+
+  /** A batch and one page of its rows in table order (200 at most). 410 past its keep date. */
+  get(batchId: string, opts: { offset?: number; limit?: number; status?: string } = {}): Promise<Json> {
+    return this.client.call('GET', `/agent/batch/${seg(batchId)}`, undefined,
+      { offset: opts.offset ?? 0, limit: opts.limit ?? 50, status: opts.status });
+  }
+
+  /** Every row of a batch, in table order; `status` keeps one status. */
+  async *rows(batchId: string, opts: { status?: string; limit?: number } = {}): AsyncGenerator<Json> {
+    const limit = opts.limit ?? 200;
+    for (let offset = 0; ;) {
+      const page = await this.get(batchId, { offset, limit, status: opts.status });
+      const rows = (page.data as Json[]) ?? [];
+      for (const row of rows) yield row;
+      if (!page.more || !rows.length) return;
+      offset += rows.length;
+    }
+  }
+
+  /** Resolves once every row has ended, to the batch. */
+  async wait(batchId: string, opts: WaitOptions = {}): Promise<Json> {
+    const deadline = Date.now() + (opts.timeoutMs ?? 3_600_000);
+    for (;;) {
+      const batch = await this.get(batchId, { limit: 1 });
+      if (!isRunning(batch.status)) return batch;
+      if (Date.now() > deadline) throw new MeshArcTimeoutError(`agent batch ${batchId} is still ${String(batch.status)}`, batchId);
+      await sleep(opts.pollMs ?? 5000);
+      await this.client.pace();
+    }
+  }
+
+  /** The workspace's batches, newest first, without their rows. */
+  async *list(opts: { limit?: number } = {}): AsyncGenerator<Json> {
+    yield* paged<Json>(this.client, '/agent/batch', { limit: opts.limit ?? 25 });
+  }
+
+  /** Stop it: rows not started are cancelled, running ones stop before their next step. */
+  cancel(batchId: string): Promise<{ id: string; status: string }> {
+    return this.client.call('DELETE', `/agent/batch/${seg(batchId)}`);
+  }
+
+  /** The table with its answers as a file; resolves to the Response. A CSV cell that would start a formula is written as text. */
+  export(batchId: string, format: 'csv' | 'jsonl' = 'csv'): Promise<Response> {
+    return this.client.raw('GET', `/agent/batch/${seg(batchId)}/export`, undefined, { format });
+  }
+}
+
+/** A change or a new result starts work: `arc.triggers`. */
+export class Triggers {
+  constructor(private readonly client: MeshArc) {}
+
+  /**
+   * Start an agent run, a re-crawl, a monitor run or a re-check when a project's
+   * changes or a monitor's run match. `source` is `{ kind: 'project' | 'monitor', id }`;
+   * `action` `{ type: 'agent', prompt, ... }`, `{ type: 'recrawl' }` or
+   * `{ type: 'monitor' | 'recheck', monitorId }`. It looks from now on.
+   */
+  create(source: { kind: 'project' | 'monitor'; id: string }, action: Json,
+    opts: { when?: Json; limits?: Json; name?: string; status?: 'active' | 'paused' } = {}): Promise<Json> {
+    return this.client.call('POST', '/triggers', { source, action, ...opts });
+  }
+
+  /** Newest first; `sourceId` keeps one project's or monitor's, `targetId` those whose action runs a monitor. */
+  async list(opts: { sourceId?: string; targetId?: string } = {}): Promise<Json[]> {
+    return (await this.client.call<{ data: Json[] }>('GET', '/triggers', undefined,
+      { source_id: opts.sourceId, target_id: opts.targetId })).data;
+  }
+
+  get(triggerId: string): Promise<Json> {
+    return this.client.call('GET', `/triggers/${seg(triggerId)}`);
+  }
+
+  /** Its name, condition, action, limits or status; resumed, it looks from then on. */
+  update(triggerId: string, fields: { name?: string; when?: Json; action?: Json; limits?: Json; status?: 'active' | 'paused' }): Promise<Json> {
+    return this.client.call('PATCH', `/triggers/${seg(triggerId)}`, fields);
+  }
+
+  /** The trigger and its firing history. What it started stays. */
+  delete(triggerId: string): Promise<{ id: string; deleted: boolean }> {
+    return this.client.call('DELETE', `/triggers/${seg(triggerId)}`);
+  }
+
+  /** Its firing history, newest first, kept 90 days. */
+  async *fires(triggerId: string, opts: { limit?: number } = {}): AsyncGenerator<Json> {
+    yield* paged<Json>(this.client, `/triggers/${seg(triggerId)}/fires`, { limit: opts.limit ?? 25 });
+  }
+
+  /** What the source's latest run would make of it; fires nothing. */
+  preview(triggerId: string): Promise<Json> {
+    return this.client.call('POST', `/triggers/${seg(triggerId)}/preview`);
+  }
+}
+
+/** What agents proposed to watch, for a member to approve: `arc.proposals`. */
+export class Proposals {
+  constructor(private readonly client: MeshArc) {}
+
+  /** Those waiting ('proposed', the default), the 'approved', or all (''); `runId` keeps one agent run's. */
+  async list(opts: { status?: 'proposed' | 'approved' | ''; runId?: string } = {}): Promise<Json[]> {
+    return (await this.client.call<{ data: Json[] }>('GET', '/proposals', undefined,
+      { status: opts.status ?? 'proposed', run_id: opts.runId })).data;
+  }
+
+  /** Make what was proposed. 409 when decided already; 402 at the project limit or with no credits left. */
+  approve(proposalId: string): Promise<Json> {
+    return this.client.call('POST', `/proposals/${seg(proposalId)}/approve`);
+  }
+
+  /** Not wanted: the proposal is deleted. */
+  dismiss(proposalId: string): Promise<Json> {
+    return this.client.call('POST', `/proposals/${seg(proposalId)}/dismiss`);
+  }
+}
+
+/**
+ * Workspaces this one makes for its own customers (Scale and Enterprise):
+ * `arc.subAccounts`. Each spends this workspace's credits under a cap of its
+ * own. Acting inside one: `arc.asSubAccount(id)`. Every call needs an admin key.
+ */
+export class SubAccounts {
+  constructor(private readonly client: MeshArc) {}
+
+  /** `{ data, allowed, spent, remaining }`. */
+  list(): Promise<Json> {
+    return this.client.call('GET', '/orgs/children');
+  }
+
+  /** A sub-account; `monthlyCap` in credits (0 or none: no cap), `externalId` your own id for it. */
+  create(name: string, opts: { monthlyCap?: number; externalId?: string; idempotencyKey?: string } = {}): Promise<Json> {
+    const { idempotencyKey, ...rest } = opts;
+    return this.client.call('POST', '/orgs/children', { name, ...rest }, undefined, idempotencyKey);
+  }
+
+  /** One, with its month, its spend by kind, its latest charges, and which of your keys acted on it. */
+  get(childId: string): Promise<Json> {
+    return this.client.call('GET', `/orgs/children/${seg(childId)}`);
+  }
+
+  /** Rename it, set its cap (0: none), or suspend it -- which refuses its keys and cancels what it runs -- and lift that. */
+  update(childId: string, fields: { name?: string; monthlyCap?: number; suspended?: boolean; reason?: string }): Promise<Json> {
+    return this.client.call('PATCH', `/orgs/children/${seg(childId)}`, fields);
+  }
+
+  keys(childId: string): Promise<Json[]> {
+    return this.client.call<Json[]>('GET', `/orgs/children/${seg(childId)}/keys`);
+  }
+
+  /** A key of its own, for your customer: it reaches that workspace and nothing else. The plaintext is under `key`, once. */
+  createKey(childId: string, name = 'default', opts: Omit<KeyOptions, 'projects'> = {}): Promise<Json> {
+    const body: Json = { name };
+    if (opts.scopes) body.scopes = opts.scopes;
+    if (opts.expiresInDays) body.expires_in_days = opts.expiresInDays;
+    if (opts.rpm) body.rpm = opts.rpm;
+    return this.client.call('POST', `/orgs/children/${seg(childId)}/keys`, body);
+  }
+
+  revokeKey(childId: string, keyId: string): Promise<void> {
+    return this.client.call<void>('DELETE', `/orgs/children/${seg(childId)}/keys/${seg(keyId)}`);
+  }
+}
+
+/** The workspace's connections -- destinations, models and data providers. Secrets are sent, never returned. */
+export class Connections {
+  constructor(private readonly client: MeshArc) {}
+
+  /** The catalogue: each provider's kind, fields, secrets and note. */
+  providers(): Promise<Json> {
+    return this.client.call('GET', '/connections/providers');
+  }
+
+  async list(): Promise<Json[]> {
+    return (await this.client.call<{ connections: Json[] }>('GET', '/connections')).connections;
+  }
+
+  /** `provider` from `providers()`; 'pdl' and 'fmp' are the data providers the agent reads, with `secrets: { api_key }`. */
+  create(provider: string, opts: { name?: string; config?: Json; secrets?: Json } = {}): Promise<Json> {
+    return this.client.call('POST', '/connections', { provider, ...opts });
+  }
+
+  get(connectionId: string): Promise<Json> {
+    return this.client.call('GET', `/connections/${seg(connectionId)}`);
+  }
+
+  update(connectionId: string, fields: { name?: string; config?: Json; secrets?: Json }): Promise<Json> {
+    return this.client.call('PATCH', `/connections/${seg(connectionId)}`, fields);
+  }
+
+  delete(connectionId: string): Promise<void> {
+    return this.client.call<void>('DELETE', `/connections/${seg(connectionId)}`);
+  }
+
+  /** Reach the provider with the stored credentials: `{ status, error, detail }`. */
+  test(connectionId: string): Promise<Json> {
+    return this.client.call('POST', `/connections/${seg(connectionId)}/test`);
+  }
+}
+
+/** The workspace's saved logins, made in the app from a live browser. The session is never returned. Admin keys only. */
+export class Logins {
+  constructor(private readonly client: MeshArc) {}
+
+  /** `{ data, enabled, why }`. */
+  list(): Promise<Json> {
+    return this.client.call('GET', '/logins');
+  }
+
+  /** Rename it; `expired: true` stops using it now. */
+  update(loginId: string, fields: { name?: string; expired?: boolean }): Promise<Json> {
+    return this.client.call('PATCH', `/logins/${seg(loginId)}`, fields);
+  }
+
+  /** Delete it: projects and runs that name it stop, saying so. */
+  delete(loginId: string): Promise<void> {
+    return this.client.call<void>('DELETE', `/logins/${seg(loginId)}`);
+  }
+
+  /** One plain fetch of the site's front page with it: `{ status, finalUrl, loginPage, reason }`. Free. */
+  test(loginId: string): Promise<Json> {
+    return this.client.call('POST', `/logins/${seg(loginId)}/test`);
   }
 }
 
@@ -1307,6 +1744,20 @@ export class AgentRun {
     if (opts.apiTimeoutS !== undefined && opts.apiTimeoutS > 0) body.timeout = Math.min(opts.apiTimeoutS, 120);
     const next = await this.client.call<AgentEnvelope>('POST', `/agent/${seg(this.id)}/continue`, body, undefined, opts.idempotencyKey);
     return new AgentRun(this.client, next, this.webhookSecret);
+  }
+
+  /**
+   * Ask a follow-up in this run's conversation; resolves to its handle. It
+   * answers after everything asked and found in the conversation before it,
+   * and may read again, free, any page the conversation read. Its options are
+   * its own, as `agent()` takes them. This run must be the conversation's
+   * latest message, and finished: 409 'conflict' otherwise (the error names
+   * the latest), or past 30 messages; 410 'expired' past its keep date.
+   */
+  async followUp(prompt: string, opts: AgentOptions = {}): Promise<AgentRun> {
+    const next = await this.client.call<AgentEnvelope>('POST', `/agent/${seg(this.id)}/follow-up`, agentBody(prompt, opts),
+      undefined, opts.idempotencyKey);
+    return new AgentRun(this.client, next);
   }
 
   /**
