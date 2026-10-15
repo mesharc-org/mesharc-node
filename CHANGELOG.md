@@ -17,6 +17,14 @@ All notable changes to this package are recorded here. The format follows
 - **Sub-accounts**: `arc.subAccounts` makes and manages workspaces for your customers, and `arc.asSubAccount(id)` (or `new MeshArc(key, { tenant })`) is a client whose every request carries `X-MeshArc-Tenant`; `TENANT_HEADER` names it.
 - **`arc.connections` and `arc.logins`**: the workspace's connections, a data provider among them, and its saved logins. Admin keys only.
 
+### Fixed
+
+- `agentBatches.wait()` waits while a table is `cancelling` -- its rows still stopping -- and resolves once it has ended. It resolved at `cancelling`, before the rows had stopped.
+- `run.followsRunId` and `run.followedBy`, and the same fields on `AgentEnvelope` and `AgentSummary`, name the message a follow-up follows and the one asked after it.
+- The `Monitor` type has `budget`, `spentThisMonth`, `alerts`, `addToProject`, `rows`, `destination` and `sentiment`; `MonitorRun` has `addedToProject`, `rows`, `destinationSync`, `triggeredBy`, `partial` and `sentimentPending`, as the API returns them. A records monitor's `rows.key` may be one column or several.
+- `sentiment` on `monitors.create` and `update` is `false` or `{ connectionId, only }`; `true` was allowed by the type but always refused by the API.
+- `monitors.rows(id, { q })` finds a record however far down the list it is, and `total` counts the matches. The API now searches every record before cutting a page; before, a search looked at one page only. **This needs the API's fix**, on its feature branch.
+
 ## 0.6.0 - 2026-10-14
 
 The version jumps from 0.2.0 so the Node and Python clients share a number for the same API.
