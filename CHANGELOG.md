@@ -4,6 +4,18 @@ All notable changes to this package are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [SemVer](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- **Follow-ups and conversations.** `run.followUp(prompt, opts)` asks the next question in a run's conversation and resolves to its `AgentRun`; `arc.conversations({ q, limit })` walks the workspace's conversations, `arc.conversation(id)` reads one with every run in it. **These need an API with follow-ups**, on the API's feature branch, not yet on mesharc.dev.
+- **`agent()` takes `loginId`, `dataConnections` and `proposals`**: a saved login its site is read with; up to two data-provider connections (People Data Labs, Financial Modeling Prep) the agent looks company and financial data up with on your own key, at no MeshArc credits, each record a source `{ url, title, provider }`; and leave to propose things to watch. Each is sent only when given.
+- **`arc.agentBatches`: the agent over every row of a table** — `preview`, `start`, `get`, `rows`, `wait`, `list`, `cancel` and `export`.
+- **Monitors in full**: `monitors.create` and `update` take `budget`, `alerts`, `addToProject`, `rows`, `destination` and `sentiment`; new `monitors.overview`, `rows`, `rowsPage`, `row`, `rowEvents` and `exportRows`.
+- **`arc.triggers`, `arc.proposals` and `arc.estimate(kind, schedule, opts)`.**
+- **Sub-accounts**: `arc.subAccounts` makes and manages workspaces for your customers, and `arc.asSubAccount(id)` (or `new MeshArc(key, { tenant })`) is a client whose every request carries `X-MeshArc-Tenant`; `TENANT_HEADER` names it.
+- **`arc.connections` and `arc.logins`**: the workspace's connections, a data provider among them, and its saved logins. Admin keys only.
+
 ## 0.6.0 - 2026-10-14
 
 The version jumps from 0.2.0 so the Node and Python clients share a number for the same API.

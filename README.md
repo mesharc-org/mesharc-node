@@ -210,7 +210,7 @@ for await (const step of run.trace()) console.log(step.seq, step.kind, step.text
 const { status } = await run.cancel();   // 'cancelled' if it was queued, 'cancelling' if it was running
 ```
 
-`trace()` yields the run's steps (`start`, `model`, `search`, `fetch`, …) oldest first and ends when the run does; `{ follow: false }` returns what exists, `{ after: seq }` starts later. A running run stops before its next step, and what it already used stays charged; `cancel()` leaves `run.envelope` as it was, so `refresh()` reads the outcome. `arc.cancelAgent(id)` stops a run by its id, with no handle needed.
+`trace()` yields the run's steps (`start`, `model`, `search`, `fetch`, `lookup`, …) oldest first and ends when the run does; `{ follow: false }` returns what exists, `{ after: seq }` starts later. A running run stops before its next step, and what it already used stays charged; `cancel()` leaves `run.envelope` as it was, so `refresh()` reads the outcome. `arc.cancelAgent(id)` stops a run by its id, with no handle needed.
 
 ```ts
 for await (const r of arc.agentRuns({ status: 'done', limit: 50 })) console.log(r.id, r.prompt, r.steps, r.creditsUsed);
@@ -220,6 +220,27 @@ for await (const r of arc.agentRuns({ model: 'openai:gpt-5.4-mini', since: new D
 `agentRuns` yields the workspace's agent runs, newest first, following the cursor. `status` keeps one status (`queued`, `running`, `done`, `error`, `cancelled`, `credit_limit` or `expired`), `model` one model's runs (by the name runs show it under), and `since` / `until` the runs made from / before an ISO 8601 date or date-time — a `Date` is sent as its ISO string, and an invalid `Date` throws a `TypeError` before any request.
 
 An agent run needs a key that can write. It is charged each page as it reads it (a refused page is free) and the model's tokens at the model provider's price plus 20% — or 1 credit per 1,000 tokens on the workspace's own connection (`connectionId`). A run and its trace are kept 7 days; after that `getAgent` throws `MeshArcError` 410 with code `expired`, and `trace()` ends quietly.
+
+### Follow-ups, saved logins, data providers and proposals
+
+**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+
+```ts
+const first = await arc.agent('Which plans does example.com sell?', { urls: ['https://example.com/pricing'] });
+await first.wait();
+const next = await first.followUp('And which of them include SSO?');   // the same conversation
+console.log((await next.wait()).data);
+
+for await (const c of arc.conversations({ q: 'example.com' })) console.log(c.id, c.messages, c.title);
+const thread = await arc.conversation(first.id);                     // every run in it, under `runs`
+
+const run = await arc.agent('How many employees does Stripe have?', {
+  dataConnections: ['conn_pdl'],   // the workspace's data providers, one per provider
+  proposals: true,                 // it may propose things to watch
+});
+```
+
+`followUp(prompt, opts)` answers after everything asked and found in the conversation before it, and may read again, free, any page the conversation read; its options are its own, as `agent()` takes them. Only the conversation's latest message can be followed, once it has finished: `MeshArcError` 409 `conflict` otherwise, or past 30 messages. `dataConnections` names up to two of the workspace's data-provider connections (People Data Labs for company data, Financial Modeling Prep for financial data): the agent looks things up on your own key, MeshArc charges no credits, and each record found is one of `run.sources` as `{ url, title, provider }`. `loginId` is one of the workspace's saved logins: pages on its site are read signed in. `proposals: true` lets the agent propose things to watch, which wait in `arc.proposals`.
 
 ## Monitors: a search or a question, asked again on a schedule
 
@@ -251,10 +272,44 @@ for await (const r of arc.monitors.runs(mon.id)) console.log(r.createdAt, r.stat
 | `monitors.run(id, { idempotencyKey })` | Run it now, paused or not; `MeshArcError` 409 `conflict` while a run is under way, 402 `credits_exhausted` when the credits are spent |
 | `monitors.runs(id, { limit })` | Its runs, newest first, following the cursor: `trigger`, `status`, `refId` (the search or agent run it made), `credits`, `answered`, `changed`, `summary`, `diff` |
 | `monitors.delete(id)` | The monitor and its runs; the searches and agent runs it made stay in the history, and an agent run under way is stopped |
+| `monitors.overview({ kind })` | Everything on a schedule — projects and monitors — with next and last run, this month's spend, an estimate and caps |
+| `monitors.rows(id, { active, q, limit })` · `monitors.rowsPage(id, ...)` · `monitors.row(id, key)` · `monitors.rowEvents(id, { runId, kind })` · `monitors.exportRows(id, { dataset, format })` | An agent monitor's records (each `{ key, attrs, sources, ... }`), one record with its history, what moved, and all of it as a file |
+
+`opts` also takes, beside those, `budget` (`{ perRun, perMonth }` in credits: `perRun` lowers an agent monitor's `maxCredits`, and a run due past `perMonth` is skipped, the webhook hearing `budget.reached` once a month), `alerts` (`{ email, chatUrl }`: the workspace's run emails and a Slack, Discord, Teams or Google Chat incoming webhook), a search monitor's `addToProject`, an agent monitor's `rows` (follow a list answer record by record: `true` or `{ path, key, confirmAfter }`) and `destination`, and a news monitor's `sentiment` (`{ connectionId, only }`: each run's new results scored by that LLM connection). `update` takes the same; `budget`, `alerts` and `sentiment` are replaced whole (`{}` for none), and `addToProject: ''` and `destination: ''` remove them. These need an API with them, on the API's feature branch.
 
 A run's `diff` is, for a search, `{ baseline, withheld, comparable, new, dropped, moved, changed, summary }`, and for an agent run `{ baseline, withheld, changed, counts, changes, summary }`; `withheld` is the reason a run was not compared, `''` when it was.
 
 Each run is an ordinary search or agent run, charged as one; a run that did not answer — a results page every engine refused, an agent run stopped at its credit limit — is kept and compared with nothing. `arc.monitors` is not `arc.monitor()`, which is the workspace's job queue: what is queued and running.
+
+## The agent over a table
+
+**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+
+```ts
+const table = { csv: 'Company,Website\nAcme,acme.com\nGlobex,globex.com\n', maxCreditsPerRow: 300, urls: ['{{Website}}'],
+  schema: { type: 'object', properties: { plan: { type: 'string' }, price_month: { type: 'number' } } } };
+console.log((await arc.agentBatches.preview('What does {{Company}} charge for its cheapest plan?', table)).estimate);
+const batch = await arc.agentBatches.start('What does {{Company}} charge for its cheapest plan?', { ...table, concurrency: 3 });
+await arc.agentBatches.wait(batch.id);
+for await (const row of arc.agentBatches.rows(batch.id)) console.log(row.values, row.status, row.data);
+const csv = await (await arc.agentBatches.export(batch.id)).text();
+```
+
+One agent run a row: the prompt and starting URLs filled from the row's columns as `{{column}}`, the answer — shaped by `schema`, of type object — the row's new columns. `maxCreditsPerRow` is required: each row stops there and pays only for what it used, and the batch never spends more than rows × the cap, or your balance when it started if that was less. `preview` checks everything and estimates the cost without starting anything. `agentBatches` also has `get(id, { offset, limit, status })`, `list()` and `cancel(id)`; a batch is kept 7 days, then `get` throws 410 `expired`.
+
+## Triggers, proposals, the estimate, sub-accounts, connections and logins
+
+**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+
+| Method | What it does |
+|---|---|
+| `triggers.create(source, action, { when, limits, name, status })` · `list({ sourceId, targetId })` · `get` · `update` · `delete` · `fires(id)` · `preview(id)` | A project's changes or a monitor's run start an agent run, a re-crawl, a monitor run or a re-check |
+| `proposals.list({ status, runId })` · `approve(id)` · `dismiss(id)` | What agents proposed to watch; approving makes the project or monitor |
+| `estimate(kind, schedule, { projectId, monitorId, maxPages, maxTier, maxCredits, monthCap })` | About how many credits a crawl, search or agent on a schedule costs a month |
+| `subAccounts.list()` · `create(name, { monthlyCap, externalId, idempotencyKey })` · `get` · `update(id, { name, monthlyCap, suspended, reason })` · `keys` · `createKey` · `revokeKey` | Workspaces this one makes for its customers (Scale and Enterprise); admin keys only |
+| `asSubAccount(id)` · `new MeshArc(key, { tenant })` | A client whose every request carries `X-MeshArc-Tenant` and acts on that sub-account |
+| `connections.providers()` · `list()` · `create(provider, { name, config, secrets })` · `get` · `update` · `delete` · `test(id)` | The workspace's connections — a data provider (`pdl`, `fmp`) among them; admin keys only |
+| `logins.list()` · `update(id, { name, expired })` · `test(id)` · `delete(id)` | Saved logins, made in the app from a live browser; the session is never returned |
 
 ## Watching a site: projects and runs
 
@@ -345,7 +400,7 @@ try {
 
 ## Idempotency and timeouts
 
-- `scrape`, `scrapeOne`, `crawl`, `webSearch`, `agent`, `run.continue`, `monitors.create` and `monitors.run` take `idempotencyKey`: send the same key again within 24 hours and you get the first answer back rather than a second job.
+- `scrape`, `scrapeOne`, `crawl`, `webSearch`, `agent`, `run.continue`, `run.followUp`, `monitors.create`, `monitors.run`, `agentBatches.start` and `subAccounts.create` take `idempotencyKey`: send the same key again within 24 hours and you get the first answer back rather than a second job.
 - Waiting calls take `{ wait, pollMs, timeoutMs }`; `wait: false` returns the envelope at once. By default a crawl, a project run and a batch scrape poll every 3 s for up to an hour; `extract` and `map` every 2 s for up to 5 minutes; `scrapeOne` and `webSearch` every 2 s for up to 10 minutes. An agent run's `wait()` and `trace()` take `{ pollMs, timeoutMs }` and poll every 2 s for up to an hour.
 - Every HTTP request is aborted after `timeoutMs` (150 s by default) and retried on 429, 502, 503, 504 and network failures when it is safe to repeat — a GET, a DELETE, or a POST with an idempotency key — up to `maxRetries` times (2), honouring `Retry-After`.
 - `apiTimeoutS` on a single scrape is how long the API itself holds the request open (60 s by default, 120 at most); a slower page comes back as an id and is polled.
