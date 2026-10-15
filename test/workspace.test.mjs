@@ -46,6 +46,7 @@ test('a follow-up posts its own request to the run\'s conversation, with its key
   assert.equal(calls[1].headers['Idempotency-Key'], 'f-1');
   assert.deepEqual(calls[1].body, { prompt: 'and prices?', maxCredits: 300, timeout: 120 });
   assert.equal(next.id, 'r2');
+  assert.deepEqual([next.followsRunId, next.followedBy, first.followsRunId], ['r1', null, null]);
 });
 
 test('a follow-up of a message that is not the latest is a 409', async () => {
@@ -92,6 +93,11 @@ test('a table\'s rows are read page by page until there is no more', async () =>
 test('waiting for a table polls until it ends, and times out plainly', async () => {
   let { arc } = client([{ body: { id: 'b1', status: 'running' } }, { body: { id: 'b1', status: 'done' } }]);
   assert.equal((await arc.agentBatches.wait('b1', { pollMs: 0 })).status, 'done');
+  // A table being cancelled still has rows stopping: it is waited for until it has ended.
+  let calls;
+  ({ arc, calls } = client([{ body: { id: 'b1', status: 'cancelling' } }, { body: { id: 'b1', status: 'cancelled' } }]));
+  assert.equal((await arc.agentBatches.wait('b1', { pollMs: 0 })).status, 'cancelled');
+  assert.equal(calls.length, 2);
   ({ arc } = client([{ body: { id: 'b1', status: 'running' } }]));
   await assert.rejects(arc.agentBatches.wait('b1', { pollMs: 0, timeoutMs: -1 }), e => e instanceof MeshArcTimeoutError && e.jobId === 'b1');
 });

@@ -105,7 +105,8 @@ function readEnv(name: string): string | undefined {
 }
 
 function isRunning(status: unknown): boolean {
-  return status === 'queued' || status === 'running';
+  // 'cancelling' is a table whose rows are still stopping: not finished yet.
+  return status === 'queued' || status === 'running' || status === 'cancelling';
 }
 
 export class MeshArc {
@@ -871,6 +872,10 @@ export interface AgentEnvelope extends Json {
   continuesRunId?: string | null;
   /** The run that carried this one on, whose answer replaces this one's partial; null until one does. */
   continuedBy?: string | null;
+  /** The message this one follows in its conversation (`run.followUp`); null for a conversation's first. */
+  followsRunId?: string | null;
+  /** The follow-up asked after this message; null until one is. */
+  followedBy?: string | null;
   stopReason: string;
   /** Empty when there is no error. */
   error: string;
@@ -912,6 +917,8 @@ export interface AgentSummary extends Json {
   threadId: string;
   continuesRunId?: string | null;
   continuedBy?: string | null;
+  followsRunId?: string | null;
+  followedBy?: string | null;
   creditsUsed: number;
   error: string;
   createdAt: string | null;
@@ -994,11 +1001,11 @@ export interface CreateMonitorOptions {
   /** A search monitor's: a project its new results on that project's site are added to. */
   addToProject?: string;
   /** An agent monitor's: follow a list answer record by record -- true, or `{ path, key, confirmAfter }`. */
-  rows?: boolean | { path?: string; key?: string; confirmAfter?: number };
+  rows?: boolean | { path?: string; key?: string | string[]; confirmAfter?: number };
   /** A records monitor's: a destination its records are written to after each run. */
   destination?: string;
   /** A news monitor's: `{ connectionId, only }`, each run's new results scored by that LLM connection. */
-  sentiment?: boolean | { connectionId: string; only?: ('positive' | 'neutral' | 'negative')[] };
+  sentiment?: false | { connectionId: string; only?: ('positive' | 'neutral' | 'negative')[] };
 }
 
 /** What `monitors.update` changes; what is left out stays as it is. */
@@ -1017,11 +1024,11 @@ export interface MonitorUpdate {
   /** A project id, or '' for none. */
   addToProject?: string;
   /** A new path or key starts the records again; `{}` or false for none. */
-  rows?: boolean | { path?: string; key?: string; confirmAfter?: number };
+  rows?: boolean | { path?: string; key?: string | string[]; confirmAfter?: number };
   /** A destination id, or '' for none. */
   destination?: string;
   /** Replaced whole; `{}` or false for none. */
-  sentiment?: boolean | Json;
+  sentiment?: false | Json;
 }
 
 /** A table for `agentBatches.preview` / `start`: the API's own names. */
@@ -1074,6 +1081,16 @@ export interface MonitorRun extends Json {
   diff: Json | null;
   /** Empty when there is no error. */
   error: string;
+  /** A search monitor's: how many of its results were added to its project. */
+  addedToProject?: number;
+  /** A records monitor's: `{ rows, added, changed, gone, same, withheld }`, and the write of its records to the destination. */
+  rows?: Json | null;
+  destinationSync?: Json | null;
+  /** Started by a trigger: `{ triggerId, fireId, sourceRunId }`; a re-check that looked at some records only is `partial`. */
+  triggeredBy?: Json | null;
+  partial?: boolean;
+  /** A news run whose new results' tone is still being scored. */
+  sentimentPending?: boolean;
   createdAt: string | null;
   finishedAt: string | null;
 }
@@ -1089,6 +1106,18 @@ export interface Monitor extends Json {
   status: 'active' | 'paused';
   /** Where `search.changed` / `agent.changed` go; never the secret. */
   webhook: { url: string; events: string[] } | null;
+  /** `{ perRun, perMonth }` in credits; 0 is no cap. */
+  budget?: Json | null;
+  /** What its runs made this calendar month (UTC) have cost. */
+  spentThisMonth?: number;
+  /** `{ email, chatUrl }`, the chat URL masked. */
+  alerts?: Json | null;
+  addToProject?: string | null;
+  /** `{ path, key, columns, confirmAfter }` when it follows its answer as records. */
+  rows?: Json | null;
+  destination?: string | null;
+  /** `{ connectionId, only }` when a news monitor scores its new results' tone. */
+  sentiment?: Json | null;
   /** Null while it is paused. */
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -1697,6 +1726,16 @@ export class AgentRun {
   /** The run that carried this one on; null until one does. */
   get continuedBy(): string | null {
     return this.envelope.continuedBy ?? null;
+  }
+
+  /** The message this one follows in its conversation (`followUp`); null for its first. */
+  get followsRunId(): string | null {
+    return this.envelope.followsRunId ?? null;
+  }
+
+  /** The follow-up asked after this message; null until one is. */
+  get followedBy(): string | null {
+    return this.envelope.followedBy ?? null;
   }
 
   /** The run as it stands now. */
