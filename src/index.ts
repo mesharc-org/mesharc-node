@@ -753,8 +753,9 @@ export interface AgentOptions {
   /** The same key within 24 hours returns the first answer rather than starting a second run. */
   idempotencyKey?: string;
   /**
-   * The saved logins it reads with, each only on its own site, the page's URL choosing it: 'auto' (every active
-   * one, the API's default -- none need picking), 'none', or a list of login ids.
+   * The saved logins the agent may sign in with, each only on its own site, the page's URL choosing it: 'auto'
+   * (every active one, the API's default -- none need picking), 'none', or a list of login ids. Pages are read
+   * signed out; the agent signs in page by page where a page needs the account.
    */
   logins?: 'auto' | 'none' | string[];
   /** One login's id: the older form of `logins: [id]`. */
