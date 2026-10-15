@@ -8,6 +8,7 @@ All notable changes to this package are recorded here. The format follows
 
 ### Added
 
+- **The agent's saved logins need no picking.** `agent()`, `run.followUp()` and `agentBatches` take `logins`: left out, the API reads each site the workspace has a saved login for signed in with that site's login (`'auto'`), and every other site signed out; `'none'`, or a list of login ids, changes that. `loginId` is the older form of a list of one.
 - **Follow-ups and conversations.** `run.followUp(prompt, opts)` asks the next question in a run's conversation and resolves to its `AgentRun`; `arc.conversations({ q, limit })` walks the workspace's conversations, `arc.conversation(id)` reads one with every run in it. **These need an API with follow-ups**, on the API's feature branch, not yet on mesharc.dev.
 - **`agent()` takes `loginId`, `dataConnections` and `proposals`**: a saved login its site is read with; up to two data-provider connections (People Data Labs, Financial Modeling Prep) the agent looks company and financial data up with on your own key, at no MeshArc credits, each record a source `{ url, title, provider }`; and leave to propose things to watch. Each is sent only when given.
 - **`arc.agentBatches`: the agent over every row of a table** — `preview`, `start`, `get`, `rows`, `wait`, `list`, `cancel` and `export`.

@@ -28,6 +28,16 @@ test('an agent run names its login, data providers and proposals only when given
   assert.deepEqual(calls[1].body, { prompt: 'p', loginId: 'L1', dataConnections: ['c1', 'c2'], proposals: true });
 });
 
+test('logins need no picking: sent only to change the API\'s auto', async () => {
+  const { arc, calls } = client([{ body: { id: 'r1', status: 'queued' } }, { body: { id: 'r2', status: 'queued' } },
+    { body: { valid: 1 } }]);
+  await arc.agent('p');
+  await arc.agent('p', { logins: ['l1', 'l2'] });
+  await arc.agentBatches.preview('about {{co}}', { csv: 'co\nAcme\n', maxCreditsPerRow: 10, logins: 'none' });
+  assert.equal('logins' in calls[0].body, false);
+  assert.deepEqual([calls[1].body.logins, calls[2].body.logins], [['l1', 'l2'], 'none']);
+});
+
 test('a follow-up posts its own request to the run\'s conversation, with its key', async () => {
   const { arc, calls } = client([{ body: { id: 'r1', status: 'done' } }, { body: { id: 'r2', status: 'queued', followsRunId: 'r1' } }]);
   const first = await arc.getAgent('r1');
