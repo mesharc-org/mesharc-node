@@ -752,7 +752,12 @@ export interface AgentOptions {
   apiTimeoutS?: number;
   /** The same key within 24 hours returns the first answer rather than starting a second run. */
   idempotencyKey?: string;
-  /** A saved login: pages on its site are read signed in, every other site signed out. */
+  /**
+   * The saved logins it reads with, each only on its own site, the page's URL choosing it: 'auto' (every active
+   * one, the API's default -- none need picking), 'none', or a list of login ids.
+   */
+  logins?: 'auto' | 'none' | string[];
+  /** One login's id: the older form of `logins: [id]`. */
   loginId?: string;
   /**
    * Up to two of the workspace's data-provider connections, one per provider (People Data
@@ -777,7 +782,7 @@ export interface EstimateOptions {
 /** A POST /agent body (and a follow-up's) in the API's own names, naming only what was given. */
 function agentBody(prompt: string, opts: AgentOptions): Json {
   const body: Json = { prompt };
-  for (const k of ['urls', 'schema', 'maxCredits', 'maxSteps', 'allowedDomains', 'webhook', 'connectionId', 'loginId',
+  for (const k of ['urls', 'schema', 'maxCredits', 'maxSteps', 'allowedDomains', 'webhook', 'connectionId', 'logins', 'loginId',
     'dataConnections', 'proposals'] as const) {
     if (opts[k] !== undefined) body[k] = opts[k];
   }
@@ -1037,6 +1042,8 @@ export interface AgentBatchRequest {
   concurrency?: number;
   name?: string;
   connectionId?: string;
+  /** As `agent()` takes it, for every row. */
+  logins?: 'auto' | 'none' | string[];
   loginId?: string;
   dataConnections?: string[];
 }
