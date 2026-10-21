@@ -76,7 +76,7 @@ const batch = await arc.scrape(['https://a.com/', 'https://b.com/x'], { concurre
 for (const row of batch.pages) console.log(row.url, row.httpStatus, row.verdict, row.credits);
 ```
 
-`scrape(urls, config, { wait: false })` returns the batch id at once; `arc.batch(id, { wait: true })` finishes it later. Pass `webhookUrl` to be told instead of polling (`batch.finished`, signed with a secret returned once).
+`scrape(urls, config, { wait: false })` returns the batch id at once; `arc.batch(id, { wait: true })` finishes it later, and `arc.cancelBatch(id)` stops what is still queued or running. Pass `webhookUrl` to be told instead of polling (`batch.finished`, signed with a secret returned once).
 
 ### What a page looks like
 
@@ -112,7 +112,7 @@ for await (const page of job.pages()) console.log(page.url, page.words);   // fo
 console.log(job.status, job.envelope.counts, job.envelope.creditsUsed);
 ```
 
-`crawl` returns a handle immediately; `job.pages()` yields pages as they land and ends when the crawl does. `{ wait: true }` blocks until it finishes; `job.wait()`, `job.refresh()`, `job.cancel()` do what they say; `arc.getCrawl(id)` reattaches to a crawl started elsewhere.
+`crawl` returns a handle immediately; `job.pages()` yields pages as they land and ends when the crawl does. `{ wait: true }` blocks until it finishes; `job.wait()`, `job.refresh()`, `job.cancel()` do what they say; `job.page(url)` reads one page of it in full; `arc.getCrawl(id)` reattaches to a crawl started elsewhere.
 
 A one-shot crawl expires after 30 days. If the site is worth watching:
 
@@ -338,6 +338,8 @@ const diff = await arc.pageDiff(project.id, 'https://docs.example.com/pricing');
 | `search(projectId, q, 'content' \| 'selector', runId?)` | Which pages say this (words, `"phrases"`) or contain this (CSS / XPath) |
 | `recrawl(projectId, urls)` | Fetch these pages again, now |
 | `sources(projectId)` | The seed, sitemap, URL list, feeds and patterns with what the last run found through each |
+| `webhookDeliveries(projectId, limit)` | What the project's webhook was sent, attempt by attempt (50 by default, 200 at most) |
+| `testWebhook(projectId)` | Send the webhook a `run.finished` message now, for the last finished run or a sample; throws 400 when no webhook URL is saved |
 | `export(projectId, { dataset, format, runId, urls })` | A dataset (`pages`, `markdown`, `changes`, `fields`, `sitemap`, `rows`, `row-events`, `llms`, `llms-full`) as `jsonl`, `csv` or `txt` — returns the `Response`, stream it. The API refuses some pairs: `llms` and `llms-full` come only as `txt`, `txt` only for those two, and `markdown` only as `jsonl` |
 
 ```ts
@@ -349,6 +351,7 @@ const csv = await (await arc.export(project.id, { dataset: 'pages', format: 'csv
 ```ts
 const me = await arc.me();               // the workspace, its plan and limits, credits used and remaining, what this key may do
 const usage = await arc.usage();         // pages per day, this month by engine
+const billing = await arc.billing();     // the plan, this month's spend and the charges behind it
 const monitor = await arc.monitor();     // the job queue: what is queued and running (not arc.monitors)
 const meta = await arc.meta();           // verdict meanings, engine costs, the config defaults
 const keys = await arc.keys();

@@ -329,6 +329,11 @@ export class MeshArc {
     }
   }
 
+  /** Stop a scrape: every page of a batch still queued or running. What it already read stays charged. */
+  cancelBatch(batchId: string): Promise<void> {
+    return this.call<void>('DELETE', `/scrape/${seg(batchId)}`);
+  }
+
   /**
    * Crawl a site once, with no project to set up first. Resolves to a Crawl
    * handle as soon as the job is queued; `wait: true` waits for it to finish.
@@ -539,6 +544,17 @@ export class MeshArc {
     return this.call('GET', `/projects/${seg(projectId)}/sources`);
   }
 
+  /** What the project's webhook was sent, attempt by attempt, newest first (`limit` 1 to 200). */
+  async webhookDeliveries(projectId: string, limit = 50): Promise<Json[]> {
+    const out = await this.call<{ deliveries?: Json[] }>('GET', '/webhooks/deliveries', undefined, { projectId, limit });
+    return out.deliveries ?? [];
+  }
+
+  /** Send the project's webhook a `run.finished` message now, for its last finished run or a sample. */
+  testWebhook(projectId: string): Promise<Json> {
+    return this.call('POST', `/projects/${seg(projectId)}/webhooks/test`);
+  }
+
   /** A dataset as a stream. Resolves to the Response; read `.body`, `.text()` or pipe it. */
   export(projectId: string, opts: ExportOptions = {}): Promise<Response> {
     const dataset = opts.dataset ?? 'pages';
@@ -574,6 +590,11 @@ export class MeshArc {
 
   usage(): Promise<Json> {
     return this.call('GET', '/me/usage');
+  }
+
+  /** The plan, what it includes, this month's spend and the charges behind it: what the Billing screen shows. */
+  billing(): Promise<Json> {
+    return this.call('GET', '/me/billing');
   }
 
   /**
@@ -1662,6 +1683,11 @@ export class Crawl {
       await sleep(opts.pollMs ?? 3000);
       await this.client.pace();
     }
+  }
+
+  /** One page of the crawl in full: markdown, html and head fields. A URL the crawl did not read throws 404. */
+  page(url: string): Promise<Json> {
+    return this.client.call('GET', `/crawl/${seg(this.id)}/page`, undefined, { url });
   }
 
   /** Make this one-shot crawl a project. Its run and pages are already in place. */

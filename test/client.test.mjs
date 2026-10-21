@@ -149,6 +149,56 @@ test('a crawl handle pages through its rows and follows the cursor', async () =>
   assert.match(calls[2].url, /cursor=abc/);
 });
 
+test('Crawl.page reads one page of the crawl by its URL; a URL it did not read throws 404', async () => {
+  const { arc, calls } = client([
+    { body: { id: 'c2', status: 'done', url: 'https://d.test/' } },
+    { body: { url: 'https://d.test/a?x=1', markdown: '# A', status: 'ok' } },
+    { status: 404, body: { error: 'page not found', code: 'not_found' } },
+  ]);
+  const job = await arc.crawl('https://d.test/');
+  assert.deepEqual(await job.page('https://d.test/a?x=1'), { url: 'https://d.test/a?x=1', markdown: '# A', status: 'ok' });
+  assert.equal(calls[1].method, 'GET');
+  assert.equal(calls[1].url, 'https://api.mesharc.dev/api/v1/crawl/c2/page?url=https%3A%2F%2Fd.test%2Fa%3Fx%3D1');
+  await assert.rejects(job.page('https://d.test/never'), err => err instanceof MeshArcError && err.status === 404 && err.code === 'not_found');
+});
+
+test('cancelBatch stops a batch in one DELETE and resolves undefined; an unknown id throws 404', async () => {
+  const { arc, calls } = client([{ status: 204 }, { status: 404, body: { error: 'scrape not found', code: 'not_found' } }]);
+  assert.equal(await arc.cancelBatch('b/1'), undefined);
+  assert.equal(calls[0].method, 'DELETE');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/scrape/b%2F1');
+  await assert.rejects(arc.cancelBatch('gone'), err => err instanceof MeshArcError && err.status === 404);
+  assert.equal(calls.length, 2);
+});
+
+test('webhookDeliveries lists a project\'s deliveries, [] when there are none', async () => {
+  const { arc, calls } = client([{ body: { deliveries: [{ id: 'd1', event: 'run.finished' }] } }, { body: {} }]);
+  assert.deepEqual(await arc.webhookDeliveries('p1', 10), [{ id: 'd1', event: 'run.finished' }]);
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/webhooks/deliveries?projectId=p1&limit=10');
+  assert.deepEqual(await arc.webhookDeliveries('p1'), []);
+  assert.match(calls[1].url, /limit=50$/);
+});
+
+test('testWebhook POSTs to the project and resolves what was queued; no webhook saved throws 400', async () => {
+  const { arc, calls } = client([
+    { status: 202, body: { queued: true, id: 'd2' } },
+    { status: 400, body: { error: 'save a webhook URL first', code: 'bad_request' } },
+  ]);
+  assert.deepEqual(await arc.testWebhook('p1'), { queued: true, id: 'd2' });
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/projects/p1/webhooks/test');
+  await assert.rejects(arc.testWebhook('p1'), err => err instanceof MeshArcError && err.status === 400);
+  assert.equal(calls.length, 2);
+});
+
+test('billing reads the workspace\'s plan, spend and charges', async () => {
+  const { arc, calls } = client([{ body: { plan: { name: 'free' }, month: { credits: 3 }, ledger: [] } }]);
+  assert.deepEqual(await arc.billing(), { plan: { name: 'free' }, month: { credits: 3 }, ledger: [] });
+  assert.equal(calls[0].method, 'GET');
+  assert.equal(calls[0].url, 'https://api.mesharc.dev/api/v1/me/billing');
+});
+
 test('export resolves to the raw response', async () => {
   const { arc, calls } = client([{ body: { rows: 1 } }]);
   const res = await arc.export('p1', { dataset: 'pages', format: 'csv' });
