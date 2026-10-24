@@ -149,6 +149,14 @@ test('a crawl handle pages through its rows and follows the cursor', async () =>
   assert.match(calls[2].url, /cursor=abc/);
 });
 
+test("a crawl's webhook is sent as given, include and all", async () => {
+  const { arc, calls } = client([{ body: { id: 'c3', status: 'running', url: 'https://d.test/', webhookSecret: 'whsec_y' } }]);
+  const webhook = { url: 'https://hooks.test/h', events: ['crawl.page'], include: ['markdown'] };
+  const job = await arc.crawl('https://d.test/', { limit: 5, webhook });
+  assert.deepEqual(calls[0].body, { url: 'https://d.test/', limit: 5, webhook });
+  assert.equal(job.webhookSecret, 'whsec_y');
+});
+
 test('Crawl.page reads one page of the crawl by its URL; a URL it did not read throws 404', async () => {
   const { arc, calls } = client([
     { body: { id: 'c2', status: 'done', url: 'https://d.test/' } },

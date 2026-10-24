@@ -17,6 +17,7 @@ All notable changes to this package are recorded here. The format follows
 - **Sub-accounts**: `arc.subAccounts` makes and manages workspaces for your customers, and `arc.asSubAccount(id)` (or `new MeshArc(key, { tenant })`) is a client whose every request carries `X-MeshArc-Tenant`; `TENANT_HEADER` names it.
 - **`arc.connections` and `arc.logins`**: the workspace's connections, a data provider among them, and its saved logins. Admin keys only.
 - **`arc.billing()`, `arc.cancelBatch(id)`, `arc.webhookDeliveries(projectId, limit)`, `arc.testWebhook(projectId)` and `crawl.page(url)`**, which the Python client already had: the Billing screen's plan, spend and charges; stopping a scrape batch; a project webhook's deliveries and a test message; one page of a crawl in full.
+- **A crawl's `webhook` takes `include: ['markdown']`**, which puts each page's markdown in the `crawl.page` messages (about 1 MB a message, the rest by a `contentUrl`). The API has accepted it since 23 October 2026; the type did not allow it.
 
 ### Fixed
 

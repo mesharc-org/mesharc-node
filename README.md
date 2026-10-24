@@ -120,7 +120,7 @@ A one-shot crawl expires after 30 days. If the site is worth watching:
 const project = await job.keep({ name: 'Docs', schedule: 'weekly' });
 ```
 
-A `webhook` in the options (`{ url, events, metadata }`) is told about `crawl.started`, `crawl.page` (fifty pages a message) and `crawl.completed`; its signing secret comes back once as `job.webhookSecret`.
+A `webhook` in the options (`{ url, events, metadata, include }`) is told about `crawl.started`, `crawl.page` (fifty pages a message) and `crawl.completed`; its signing secret comes back once as `job.webhookSecret`. With `include: ['markdown']` the `crawl.page` messages carry each page's markdown too, up to about 1 MB a message: a page that does not fit, or was not stored, comes as `markdown: null` with `markdownOmitted` (`too_large` or `not_stored`) and a `contentUrl`, an API path read with your key (`job.page(url)` reads the same). It needs `crawl.page` among the events, as it is when `events` is left out.
 
 ## Mapping a site
 
