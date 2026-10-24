@@ -634,7 +634,14 @@ export interface CrawlOptions extends WaitOptions {
   delay?: number;
   concurrency?: number;
   scrapeOptions?: Json;
-  webhook?: string | { url: string; events?: string[]; metadata?: Json };
+  /**
+   * A URL, or `{ url, events, metadata, include }`. `include: ['markdown']` (the one
+   * value) puts each page's markdown in the `crawl.page` messages, up to about 1 MB a
+   * message: a page that does not fit, or was not stored, comes as `markdown: null`
+   * with `markdownOmitted` and a `contentUrl`, an API path read with your key (or
+   * `job.page(url)`).
+   */
+  webhook?: string | { url: string; events?: string[]; metadata?: Json; include?: readonly string[] };
   config?: Config;
   idempotencyKey?: string;
   [option: string]: unknown;
