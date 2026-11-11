@@ -288,6 +288,9 @@ export class MeshArc {
    * One URL (a string) resolves to the page itself: the API holds the request
    * open until the page comes back. An array is a batch and resolves to the
    * finished batch, one row per URL, unless `wait` is false.
+   *
+   * A page a limit stopped carries `limit` (a `PageLimit`), and a batch
+   * `notices` (`LimitNotice[]`), saying what the pages needed and why.
    */
   async scrape(urls: string | string[], config?: Config, opts: ScrapeOptions & { webhookUrl?: string } = {}): Promise<Json> {
     if (typeof urls === 'string') return this.scrapeOne(urls, config, opts);
@@ -588,11 +591,15 @@ export class MeshArc {
     return this.call<void>('DELETE', `/me/keys/${seg(keyId)}`);
   }
 
+  /** This month's pages and credits; `credits.stealth` is the stealth trial (a `StealthAllowance`, or null). */
   usage(): Promise<Json> {
     return this.call('GET', '/me/usage');
   }
 
-  /** The plan, what it includes, this month's spend and the charges behind it: what the Billing screen shows. */
+  /**
+   * The plan, what it includes, this month's spend and the charges behind it: what the Billing screen shows.
+   * `month.stealth` is the stealth trial (a `StealthAllowance`, or null).
+   */
   billing(): Promise<Json> {
     return this.call('GET', '/me/billing');
   }
@@ -702,6 +709,58 @@ export interface WebSearchHit extends Json {
   page?: Json | null;
 }
 
+/** Why a limit, not the site, stopped pages: the plan's tier, the free plan's stealth trial, or the credits left. */
+export type LimitReason = 'stealth_trial_used' | 'tier_ceiling' | 'credits_left';
+
+/**
+ * A page a limit stopped carries this as `limit` (since 10 Nov 2026); null or absent otherwise.
+ * `unlockedBy` is the plan that reads the page: null for credits, and for a cap the workspace set itself
+ * (a project's or request's `max_tier` or `max_credits_per_page`), which `message` says to raise.
+ */
+export interface PageLimit extends Json {
+  /** The tier the page needed, e.g. `stealth`. */
+  needs: string;
+  reason: LimitReason;
+  /** The tier it was held to. */
+  ceiling?: string;
+  unlockedBy: string | null;
+  upgradeUrl: string;
+  message: string;
+}
+
+/**
+ * One reason a limit kept pages from an answer: a crawl, scrape, batch or search answer carries a list of
+ * these as `notices`, empty when nothing was held back. A search's notice also names the `engine`.
+ */
+export interface LimitNotice extends Json {
+  code: 'plan_limited';
+  reason: LimitReason;
+  /** How many pages. */
+  pages: number;
+  needs: string;
+  /** Up to five of the pages' URLs. */
+  examples: string[];
+  unlockedBy: string | null;
+  upgradeUrl: string;
+  message: string;
+  engine?: string;
+}
+
+/** The free plan's stealth trial in credits over the workspace's life: `credits.stealth` on `usage()`, `month.stealth` on `billing()`; null when stealth is not capped. */
+export interface StealthAllowance extends Json {
+  limit: number;
+  used: number;
+  left: number;
+}
+
+/** What kept one engine from answering a search: the tier it needed and why. The words are in the search's `notices`. */
+export interface EngineLimit extends Json {
+  needs: string;
+  reason: LimitReason;
+  /** The tier it was held to. */
+  ceiling?: string;
+}
+
 /** One engine's try at the results page. */
 export interface SearchAttempt extends Json {
   engine?: string | null;
@@ -710,6 +769,8 @@ export interface SearchAttempt extends Json {
   rung?: string | null;
   verdict?: string | null;
   credits?: number | null;
+  /** Set when a limit, not the engine, kept this engine from answering. */
+  limit?: EngineLimit | null;
 }
 
 /** A web search: its status, the results under `data`, and what it cost. */
@@ -727,6 +788,8 @@ export interface WebSearchResult extends Json {
   batchId: string | null;
   creditsUsed: number;
   attempts: SearchAttempt[];
+  /** What a limit kept from this search, e.g. Google needed the stealth tier and Bing answered; empty or absent when nothing was. */
+  notices?: LimitNotice[];
   /** The URL to poll while the search runs; null once it is finished. */
   next: string | null;
   /** Empty when there is no error. */
@@ -1646,6 +1709,14 @@ export class Crawl {
 
   get status(): string {
     return (this.envelope.status as string) ?? 'queued';
+  }
+
+  /**
+   * What a limit kept from this crawl, a line per reason; empty when nothing was held back (or from an API
+   * before 10 Nov 2026). Each page a limit stopped also carries its own `limit`.
+   */
+  get notices(): LimitNotice[] {
+    return (this.envelope.notices as LimitNotice[] | undefined) ?? [];
   }
 
   /** The envelope as it stands now, without its pages. */

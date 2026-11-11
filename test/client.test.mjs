@@ -948,3 +948,22 @@ test('monitors.delete sends DELETE and resolves the API answer; a 404 passes thr
   await assert.rejects(arc.monitors.delete('gone'), err => err instanceof MeshArcError && err.status === 404 && err.code === 'not_found');
   assert.equal(calls.length, 2);
 });
+
+test('a crawl says what a limit held back, and an older API reads as nothing', async () => {
+  const notice = {
+    code: 'plan_limited', reason: 'stealth_trial_used', pages: 2, needs: 'stealth',
+    examples: ['https://d.test/x'], unlockedBy: 'growth',
+    upgradeUrl: 'https://mesharc.dev/billing?plan=growth&from=limit_api',
+    message: "2 pages needed the stealth tier, and this workspace's free stealth trial is used up.",
+  };
+  const { arc } = client([
+    { body: { id: 'c9', status: 'running', url: 'https://d.test/' } },
+    { body: { id: 'c9', status: 'done', notices: [notice] } },
+    { body: { id: 'c8', status: 'done' } },
+  ]);
+  const job = await arc.crawl('https://d.test/');
+  assert.deepEqual(job.notices, []);
+  await job.wait({ pollMs: 0 });
+  assert.deepEqual(job.notices, [notice]);
+  assert.deepEqual((await arc.getCrawl('c8')).notices, []);
+});
