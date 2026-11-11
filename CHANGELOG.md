@@ -24,6 +24,8 @@ The agent features below -- runs, follow-ups, agent tables, agent monitors, and 
 
 ### Fixed
 
+- **`webSearch` resolves a search no engine answered, now `no_results`** (an API before 11 Nov 2026 said `blocked`, which still resolves). An earlier client rejects `no_results` as `MeshArcError` 502, so upgrade before the API sends it. `SearchAttempt` types `outsideDomains`, `listed` and `added`.
+
 - `agentBatches.wait()` waits while a table is `cancelling` -- its rows still stopping -- and resolves once it has ended. It resolved at `cancelling`, before the rows had stopped.
 - `run.followsRunId` and `run.followedBy`, and the same fields on `AgentEnvelope` and `AgentSummary`, name the message a follow-up follows and the one asked after it.
 - The `Monitor` type has `budget`, `spentThisMonth`, `alerts`, `addToProject`, `rows`, `destination` and `sentiment`; `MonitorRun` has `addedToProject`, `rows`, `destinationSync`, `triggeredBy`, `partial` and `sentimentPending`, as the API returns them. A records monitor's `rows.key` may be one column or several.

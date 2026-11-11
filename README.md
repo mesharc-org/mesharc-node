@@ -143,12 +143,12 @@ const out = await arc.webSearch('node fetch retry', {
   scrape: true,                              // read each result's page too, as markdown
 });
 
-if (out.status === 'blocked') console.log('every engine refused', out.attempts);
+if (out.status === 'no_results') console.log('no engine had results', out.attempts);
 for (const hit of out.data) console.log(hit.position, hit.url, hit.title, hit.engine, hit.page?.markdown);
 console.log(out.cached, out.creditsUsed);
 ```
 
-`webSearch` waits for the search to finish and resolves to it: `queued` and `running` are polled, `done` and `blocked` (every engine refused the results page) resolve, and `error` throws `MeshArcError`. `country`, `lang` and `excludeDomains` narrow the results further; `scrape` also takes `{ formats, maxCredits }`. `{ wait: false }` returns the search at once; `arc.getSearch(id)` reads it as it stands now.
+`webSearch` waits for the search to finish and resolves to it: `queued` and `running` are polled, `done` and `no_results` (every engine refused the results page or had nothing; `blocked` from an API before 11 Nov 2026) resolve, and `error` throws `MeshArcError`. `country`, `lang` and `excludeDomains` narrow the results further; `scrape` also takes `{ formats, maxCredits }`. `{ wait: false }` returns the search at once; `arc.getSearch(id)` reads it as it stands now.
 
 ```ts
 const news = await arc.webSearch('mesharc', { news: true, page: 2 });   // the news results, 11 to 20
