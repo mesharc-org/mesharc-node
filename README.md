@@ -169,7 +169,7 @@ A web search needs a key that can write, and spends credits. A results page ever
 
 ## Asking the agent
 
-The agent takes a prompt, searches, reads pages and answers. It needs a key that can write. A deployment that runs no agents refuses a run with status 501.
+The agent takes a prompt, searches, reads pages and answers. It needs a key that can write. A deployment that runs no agents refuses a run with status 501 (`agents_unavailable`), and mesharc.dev does not run them yet.
 
 ```ts
 const run = await arc.agent('Which plans does example.com offer, and at what price?', {
@@ -223,7 +223,7 @@ An agent run needs a key that can write. It is charged each page as it reads it 
 
 ### Follow-ups, saved logins, data providers and proposals
 
-**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+**Needs agents running:** mesharc.dev does not run agents yet, so everything in this section is refused there with 501 `agents_unavailable`.
 
 ```ts
 const first = await arc.agent('Which plans does example.com sell?', { urls: ['https://example.com/pricing'] });
@@ -275,7 +275,7 @@ for await (const r of arc.monitors.runs(mon.id)) console.log(r.createdAt, r.stat
 | `monitors.overview({ kind })` | Everything on a schedule — projects and monitors — with next and last run, this month's spend, an estimate and caps |
 | `monitors.rows(id, { active, q, limit })` · `monitors.rowsPage(id, ...)` · `monitors.row(id, key)` · `monitors.rowEvents(id, { runId, kind })` · `monitors.exportRows(id, { dataset, format })` | An agent monitor's records (each `{ key, attrs, sources, ... }`), one record with its history, what moved, and all of it as a file |
 
-`opts` also takes, beside those, `budget` (`{ perRun, perMonth }` in credits: `perRun` lowers an agent monitor's `maxCredits`, and a run due past `perMonth` is skipped, the webhook hearing `budget.reached` once a month), `alerts` (`{ email, chatUrl }`: the workspace's run emails and a Slack, Discord, Teams or Google Chat incoming webhook), a search monitor's `addToProject`, an agent monitor's `rows` (follow a list answer record by record: `true` or `{ path, key, confirmAfter }`) and `destination`, and a news monitor's `sentiment` (`{ connectionId, only }`: each run's new results scored by that LLM connection). `update` takes the same; `budget`, `alerts` and `sentiment` are replaced whole (`{}` for none), and `addToProject: ''` and `destination: ''` remove them. These need an API with them, on the API's feature branch.
+`opts` also takes, beside those, `budget` (`{ perRun, perMonth }` in credits: `perRun` lowers an agent monitor's `maxCredits`, and a run due past `perMonth` is skipped, the webhook hearing `budget.reached` once a month), `alerts` (`{ email, chatUrl }`: the workspace's run emails and a Slack, Discord, Teams or Google Chat incoming webhook), a search monitor's `addToProject`, an agent monitor's `rows` (follow a list answer record by record: `true` or `{ path, key, confirmAfter }`) and `destination`, and a news monitor's `sentiment` (`{ connectionId, only }`: each run's new results scored by that LLM connection). `update` takes the same; `budget`, `alerts` and `sentiment` are replaced whole (`{}` for none), and `addToProject: ''` and `destination: ''` remove them. An agent monitor's options need agents running, which mesharc.dev does not do yet.
 
 A run's `diff` is, for a search, `{ baseline, withheld, comparable, new, dropped, moved, changed, summary }`, and for an agent run `{ baseline, withheld, changed, counts, changes, summary }`; `withheld` is the reason a run was not compared, `''` when it was.
 
@@ -283,7 +283,7 @@ Each run is an ordinary search or agent run, charged as one; a run that did not 
 
 ## The agent over a table
 
-**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+**Needs agents running:** mesharc.dev does not run agents yet, so everything in this section is refused there with 501 `agents_unavailable`.
 
 ```ts
 const table = { csv: 'Company,Website\nAcme,acme.com\nGlobex,globex.com\n', maxCreditsPerRow: 300, urls: ['{{Website}}'],
@@ -299,7 +299,7 @@ One agent run a row: the prompt and starting URLs filled from the row's columns 
 
 ## Triggers, proposals, the estimate, sub-accounts, connections and logins
 
-**Not live on mesharc.dev yet:** everything in this section needs an API with these features, which are on the API's feature branch.
+A trigger whose action is an agent run, and proposals (which agent runs make), need agents running, which mesharc.dev does not do yet; the rest of this section is live.
 
 | Method | What it does |
 |---|---|

@@ -6,10 +6,13 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+The agent features below -- runs, follow-ups, agent tables, agent monitors, and triggers that start an agent run -- need a deployment that runs agents. mesharc.dev does not yet: it refuses them with 501 `agents_unavailable`, which the client rejects as `MeshArcError`.
+
 ### Added
 
+- **What a limit held back, typed.** Since 10 Nov 2026 a page a limit stopped -- the plan's tier, the free plan's stealth trial, the credits left -- carries `limit` (`PageLimit`), and a crawl, scrape, batch or search answer `notices` (`LimitNotice[]`, a line per reason); `crawl.notices` reads them off a crawl, `WebSearchResult` has `notices` and each `SearchAttempt` its `limit` (`EngineLimit`: the tier it needed and why). `StealthAllowance` types the free plan's stealth trial on `usage()` (`credits.stealth`) and `billing()` (`month.stealth`).
 - **The agent's saved logins need no picking.** `agent()`, `run.followUp()` and `agentBatches` take `logins`, the saved logins the agent may sign in with: left out, every one (`'auto'`); `'none'`, or a list of login ids, changes that. The agent reads pages signed out, as the public sees them, and signs in page by page where a page needs the account, with the login for that page's site. `loginId` is the older form of a list of one.
-- **Follow-ups and conversations.** `run.followUp(prompt, opts)` asks the next question in a run's conversation and resolves to its `AgentRun`; `arc.conversations({ q, limit })` walks the workspace's conversations, `arc.conversation(id)` reads one with every run in it. **These need an API with follow-ups**, on the API's feature branch, not yet on mesharc.dev.
+- **Follow-ups and conversations.** `run.followUp(prompt, opts)` asks the next question in a run's conversation and resolves to its `AgentRun`; `arc.conversations({ q, limit })` walks the workspace's conversations, `arc.conversation(id)` reads one with every run in it.
 - **`agent()` takes `loginId`, `dataConnections` and `proposals`**: a saved login its site is read with; up to two data-provider connections (People Data Labs, Financial Modeling Prep) the agent looks company and financial data up with on your own key, at no MeshArc credits, each record a source `{ url, title, provider }`; and leave to propose things to watch. Each is sent only when given.
 - **`arc.agentBatches`: the agent over every row of a table** — `preview`, `start`, `get`, `rows`, `wait`, `list`, `cancel` and `export`.
 - **Monitors in full**: `monitors.create` and `update` take `budget`, `alerts`, `addToProject`, `rows`, `destination` and `sentiment`; new `monitors.overview`, `rows`, `rowsPage`, `row`, `rowEvents` and `exportRows`.
@@ -25,7 +28,7 @@ All notable changes to this package are recorded here. The format follows
 - `run.followsRunId` and `run.followedBy`, and the same fields on `AgentEnvelope` and `AgentSummary`, name the message a follow-up follows and the one asked after it.
 - The `Monitor` type has `budget`, `spentThisMonth`, `alerts`, `addToProject`, `rows`, `destination` and `sentiment`; `MonitorRun` has `addedToProject`, `rows`, `destinationSync`, `triggeredBy`, `partial` and `sentimentPending`, as the API returns them. A records monitor's `rows.key` may be one column or several.
 - `sentiment` on `monitors.create` and `update` is `false` or `{ connectionId, only }`; `true` was allowed by the type but always refused by the API.
-- `monitors.rows(id, { q })` finds a record however far down the list it is, and `total` counts the matches. The API now searches every record before cutting a page; before, a search looked at one page only. **This needs the API's fix**, on its feature branch.
+- `monitors.rows(id, { q })` finds a record however far down the list it is, and `total` counts the matches. The API now searches every record before cutting a page; before, a search looked at one page only.
 
 ## 0.6.0 - 2026-10-14
 
