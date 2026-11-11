@@ -419,7 +419,8 @@ export class MeshArc {
     if (opts.wait === false) return out;
     const deadline = Date.now() + (opts.timeoutMs ?? 600_000);
     for (;;) {
-      if (out.status === 'done' || out.status === 'blocked') return out;
+      // no_results: every engine refused or had nothing; an API before 11 Nov 2026 said blocked.
+      if (out.status === 'done' || out.status === 'no_results' || out.status === 'blocked') return out;
       if (!isRunning(out.status)) throw new MeshArcError(502, out.error || `search ${out.status}`, 'job_failed');
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`search ${out.id} is still ${out.status}`, out.id);
       await sleep(opts.pollMs ?? 2000);
@@ -771,13 +772,22 @@ export interface SearchAttempt extends Json {
   credits?: number | null;
   /** Set when a limit, not the engine, kept this engine from answering. */
   limit?: EngineLimit | null;
+  /** How many of its results were outside includeDomains / excludeDomains and dropped. */
+  outsideDomains?: number | null;
+  /** How many results its page listed, before link lookups and filters. */
+  listed?: number | null;
+  /** How many of its results were added after the answer given (a top-up). */
+  added?: number | null;
 }
 
 /** A web search: its status, the results under `data`, and what it cost. */
 export interface WebSearchResult extends Json {
   id: string;
   kind: 'search';
-  /** queued, running (also while scraped pages land), done, blocked (every engine refused; free) or error. */
+  /**
+   * queued, running (also while scraped pages land), done, no_results (every engine refused or had
+   * nothing; free -- `blocked` from an API before 11 Nov 2026) or error.
+   */
   status: string;
   query: string;
   params: Json;
