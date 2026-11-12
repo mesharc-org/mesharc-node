@@ -6,6 +6,12 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+## 0.7.1 - 2026-11-12
+
+### Changed
+
+- **mesharc.dev runs the agent** since 12 Nov 2026: the README no longer says it refuses agent runs, follow-ups, agent tables, agent monitors and triggers that start an agent run. No code changes; a deployment not set up for agents still refuses them with 501 `agents_unavailable`.
+
 ## 0.7.0 - 2026-11-12
 
 The agent features below -- runs, follow-ups, agent tables, agent monitors, and triggers that start an agent run -- need a deployment that runs agents. mesharc.dev does not yet: it refuses them with 501 `agents_unavailable`, which the client rejects as `MeshArcError`.
