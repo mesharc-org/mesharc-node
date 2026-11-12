@@ -271,8 +271,18 @@ test('a queued web search is polled at /search/{id} with no query string until d
   }
 });
 
+test('a blocked web search resolves with its outcome', async () => {
+  // The API keeps blocked for a search no engine answered and says why in outcome.
+  for (const outcome of ['no_results', null]) {
+    const { arc } = client([{ body: { id: 's6', status: 'running' } }, { body: searchDone('s6', { status: 'blocked', outcome, data: [] }) }]);
+    const out = await arc.webSearch('mesh', { pollMs: 1 });
+    assert.equal(out.status, 'blocked');
+    assert.equal(out.outcome, outcome);
+  }
+});
+
 test('a web search with no results resolves rather than throws', async () => {
-  // no_results: every engine refused or had nothing (the API since 11 Nov 2026).
+  // A no_results status is still read, though the API keeps blocked.
   const { arc } = client([{ body: { id: 's5', status: 'running' } }, { body: searchDone('s5', { status: 'no_results', data: [] }) }]);
   const out = await arc.webSearch('mesh', { pollMs: 1 });
   assert.equal(out.status, 'no_results');
