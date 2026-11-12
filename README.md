@@ -143,7 +143,10 @@ const out = await arc.webSearch('node fetch retry', {
   scrape: true,                              // read each result's page too, as markdown
 });
 
-if (out.status === 'no_results') console.log('no engine had results', out.attempts);
+if (out.status === 'blocked') {
+  // outcome: 'no_results' (every engine refused or had nothing; free) or null (not run: no credits left)
+  console.log(out.outcome === 'no_results' ? 'no engine had results' : 'not run: no credits left', out.attempts);
+}
 for (const hit of out.data) console.log(hit.position, hit.url, hit.title, hit.engine, hit.page?.markdown);
 console.log(out.cached, out.creditsUsed);
 ```

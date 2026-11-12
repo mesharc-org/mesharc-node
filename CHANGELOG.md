@@ -6,7 +6,7 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
-## 0.7.0 - 2026-11-11
+## 0.7.0 - 2026-11-12
 
 The agent features below -- runs, follow-ups, agent tables, agent monitors, and triggers that start an agent run -- need a deployment that runs agents. mesharc.dev does not yet: it refuses them with 501 `agents_unavailable`, which the client rejects as `MeshArcError`.
 
@@ -26,7 +26,7 @@ The agent features below -- runs, follow-ups, agent tables, agent monitors, and 
 
 ### Fixed
 
-- **`webSearch` resolves a search no engine answered, now `no_results`** (an API before 11 Nov 2026 said `blocked`, which still resolves). An earlier client rejects `no_results` as `MeshArcError` 502, so upgrade before the API sends it. `SearchAttempt` types `outsideDomains`, `listed` and `added`.
+- **A search no engine answered says why: `outcome`.** It stays `blocked`, which `webSearch` resolves as before, and since 12 Nov 2026 the API adds `outcome` (typed on `WebSearchResult` and `SearchSummary`): `'no_results'` when every engine refused or had nothing (free), `null` when the search did not run because the credits left could not pay for a results page. A `no_results` status is read too. `SearchAttempt` types `outsideDomains`, `listed` and `added`.
 
 - `agentBatches.wait()` waits while a table is `cancelling` -- its rows still stopping -- and resolves once it has ended. It resolved at `cancelling`, before the rows had stopped.
 - `run.followsRunId` and `run.followedBy`, and the same fields on `AgentEnvelope` and `AgentSummary`, name the message a follow-up follows and the one asked after it.

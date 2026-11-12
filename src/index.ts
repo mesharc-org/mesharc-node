@@ -397,8 +397,10 @@ export class MeshArc {
    * scrape; valid formats are markdown, text, rawHtml, cleanHtml, links, raw,
    * screenshot and json.
    *
-   * Resolves to the finished search. When every engine refuses, the search
-   * resolves with status `blocked` rather than throwing. `wait: false`
+   * Resolves to the finished search. When no engine answers, the search
+   * resolves with status `blocked` rather than throwing, and `outcome` says
+   * why: `'no_results'` (every engine refused or had nothing; free) or `null`
+   * (it did not run: the credits left could not pay for a results page). `wait: false`
    * resolves to the first answer, which may still be queued or running.
    */
   async webSearch(query: string, opts: WebSearchOptions = {}): Promise<WebSearchResult> {
@@ -419,7 +421,7 @@ export class MeshArc {
     if (opts.wait === false) return out;
     const deadline = Date.now() + (opts.timeoutMs ?? 600_000);
     for (;;) {
-      // no_results: every engine refused or had nothing; an API before 11 Nov 2026 said blocked.
+      // blocked: no engine answered (`outcome` says why); no_results is read too, though the API keeps blocked.
       if (out.status === 'done' || out.status === 'no_results' || out.status === 'blocked') return out;
       if (!isRunning(out.status)) throw new MeshArcError(502, out.error || `search ${out.status}`, 'job_failed');
       if (Date.now() > deadline) throw new MeshArcTimeoutError(`search ${out.id} is still ${out.status}`, out.id);
@@ -785,10 +787,16 @@ export interface WebSearchResult extends Json {
   id: string;
   kind: 'search';
   /**
-   * queued, running (also while scraped pages land), done, no_results (every engine refused or had
-   * nothing; free -- `blocked` from an API before 11 Nov 2026) or error.
+   * queued, running (also while scraped pages land), done, blocked (no engine answered; see
+   * `outcome`) or error.
    */
   status: string;
+  /**
+   * With status `blocked`: `'no_results'` when every engine refused or had nothing (free), `null`
+   * when the search did not run because the credits left could not pay for a results page. Absent
+   * from an API before 12 Nov 2026.
+   */
+  outcome?: 'no_results' | null;
   query: string;
   params: Json;
   data: WebSearchHit[];
@@ -815,6 +823,8 @@ export interface SearchSummary extends Json {
   query: string;
   params: Json;
   status: string;
+  /** As on `WebSearchResult`: why a `blocked` search found nothing. */
+  outcome?: 'no_results' | null;
   engine: string;
   rung: string;
   cached: boolean;
