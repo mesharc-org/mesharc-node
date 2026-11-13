@@ -125,6 +125,21 @@ test('scrape of one URL returns the page, polling when the API answers with a jo
   assert.equal(calls[1].method, 'GET');
 });
 
+test('a one-off scrape (one URL or a batch) and a crawl write where they name: destination', async () => {
+  let { arc, calls } = client([{ body: { id: 'j2', status: 'done', data: [{ url: 'https://a.test/' }] } }]);
+  await arc.scrape('https://a.test/', undefined, { destination: 'd-1' });
+  assert.equal(calls[0].body.destination, 'd-1');
+  ({ arc, calls } = client([{ body: { id: 'b1', status: 'queued' } }]));
+  await arc.scrape(['https://a.test/x', 'https://a.test/y'], undefined, { destination: 'd-2', wait: false });
+  assert.deepEqual(calls[0].body, { urls: ['https://a.test/x', 'https://a.test/y'], destination: 'd-2' });
+  ({ arc, calls } = client([{ body: { id: 'c1', status: 'queued' } }]));
+  await arc.crawl('https://a.test/', { limit: 5, destination: 'd-3', maxTier: 'auto' });
+  assert.deepEqual(calls[0].body, { url: 'https://a.test/', limit: 5, destination: 'd-3', maxTier: 'auto' });
+  ({ arc, calls } = client([{ body: { id: 'j3', status: 'done', data: [{ url: 'https://a.test/' }] } }]));
+  await arc.scrape('https://a.test/');
+  assert.equal('destination' in calls[0].body, false);
+});
+
 test('a job that stays running past the deadline throws MeshArcTimeoutError with the id', async () => {
   const { arc } = client([{ body: { id: 'j2', status: 'running' } }, { body: { id: 'j2', status: 'running' } }]);
   await assert.rejects(arc.scrape('https://a.test/', undefined, { pollMs: 1, timeoutMs: -1 }), err => {
