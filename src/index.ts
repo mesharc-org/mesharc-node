@@ -10,7 +10,7 @@
  * https://mesharc.dev/docs/api applies to every return value.
  */
 
-export const VERSION = '0.7.1';
+export const VERSION = '0.7.2';
 
 const DEFAULT_BASE = 'https://api.mesharc.dev';
 const DEFAULT_TIMEOUT_MS = 150_000;
@@ -297,6 +297,7 @@ export class MeshArc {
     const body: Json = { urls };
     if (config) body.config = config;
     if (opts.webhookUrl) body.webhook_url = opts.webhookUrl;
+    if (opts.destination) body.destination = opts.destination;
     const batch = await this.call<{ id: string }>('POST', '/scrape', body, undefined, opts.idempotencyKey);
     if (opts.wait === false) return batch;
     return this.batch(batch.id, { ...opts, wait: true });
@@ -307,6 +308,7 @@ export class MeshArc {
     const formats = opts.formats ?? 'markdown';
     const body: Json = { url, formats, timeout: opts.apiTimeoutS ?? 60 };
     if (config) body.config = config;
+    if (opts.destination) body.destination = opts.destination;
     let out = await this.call<ScrapeEnvelope>('POST', '/scrape', body, undefined, opts.idempotencyKey);
     if (opts.wait === false) return out;
     const deadline = Date.now() + (opts.timeoutMs ?? 600_000);
@@ -624,6 +626,12 @@ export class MeshArc {
 export interface ScrapeOptions extends WaitOptions {
   /** Comma-separated bodies to return: markdown, text, cleanHtml, rawHtml. Default markdown. */
   formats?: string;
+  /**
+   * A destination id of this workspace — a database, a warehouse, a bucket.
+   * When the job is done its pages are written there too; the job envelope
+   * says how under `destinationSync`.
+   */
+  destination?: string;
   /** Seconds the API holds the request open for the page (60 by default, 120 at most). */
   apiTimeoutS?: number;
   /** The same key within 24 hours returns the first answer rather than starting a second job. */
@@ -632,6 +640,8 @@ export interface ScrapeOptions extends WaitOptions {
 
 export interface CrawlOptions extends WaitOptions {
   limit?: number;
+  /** A destination id: the crawl's pages are written there when it is done. */
+  destination?: string;
   maxDepth?: number;
   includePaths?: string[];
   excludePaths?: string[];
@@ -640,7 +650,8 @@ export interface CrawlOptions extends WaitOptions {
   allowSubdomains?: boolean;
   respectRobots?: boolean;
   maxAge?: number;
-  maxTier?: 'http' | 'browser' | 'stealth';
+  /** The highest rung a page may climb to; 'auto' is as high as the plan allows. */
+  maxTier?: 'auto' | 'http' | 'browser' | 'stealth';
   delay?: number;
   concurrency?: number;
   scrapeOptions?: Json;

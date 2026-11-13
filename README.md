@@ -76,7 +76,7 @@ const batch = await arc.scrape(['https://a.com/', 'https://b.com/x'], { concurre
 for (const row of batch.pages) console.log(row.url, row.httpStatus, row.verdict, row.credits);
 ```
 
-`scrape(urls, config, { wait: false })` returns the batch id at once; `arc.batch(id, { wait: true })` finishes it later, and `arc.cancelBatch(id)` stops what is still queued or running. Pass `webhookUrl` to be told instead of polling (`batch.finished`, signed with a secret returned once).
+`scrape(urls, config, { wait: false })` returns the batch id at once; `arc.batch(id, { wait: true })` finishes it later, and `arc.cancelBatch(id)` stops what is still queued or running. Pass `webhookUrl` to be told instead of polling (`batch.finished`, signed with a secret returned once). Pass `destination` (the id of one of the workspace's destinations) to have the pages written to that database, warehouse or bucket when the job is done; `scrapeOne` and `crawl` take it too.
 
 ### What a page looks like
 

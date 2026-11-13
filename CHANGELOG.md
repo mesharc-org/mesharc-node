@@ -6,6 +6,13 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+## 0.7.2 - 2026-11-13
+
+### Added
+
+- **A one-off scrape or crawl writes where it names.** `scrape`, `scrapeOne` and `crawl` take a `destination` option, the id of one of the workspace's destinations (a database, a warehouse, a bucket): when the job is done its pages are written there as well as returned, and the job says how the write went under `destinationSync`. The API has accepted it since 1 Oct 2026.
+- **`maxTier: 'auto'`** is typed on `crawl`: as high as the plan allows, as the API accepts.
+
 ## 0.7.1 - 2026-11-12
 
 ### Changed
