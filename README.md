@@ -145,9 +145,9 @@ const out = await arc.webSearch('node fetch retry', {
 
 if (out.status === 'blocked') {
   // outcome: 'no_results' (every engine refused or had nothing; free) or null (not run: no credits left)
-  console.log(out.outcome === 'no_results' ? 'no engine had results' : 'not run: no credits left', out.attempts);
+  console.log(out.outcome === 'no_results' ? 'no results for this search' : 'not run: no credits left', out.error);
 }
-for (const hit of out.data) console.log(hit.position, hit.url, hit.title, hit.engine, hit.page?.markdown);
+for (const hit of out.data) console.log(hit.position, hit.url, hit.title, hit.page?.markdown);
 console.log(out.cached, out.creditsUsed);
 ```
 

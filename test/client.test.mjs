@@ -255,8 +255,8 @@ test('pace does not wait while the key has requests to spare', async () => {
 });
 
 const searchDone = (id, extra = {}) => ({
-  id, kind: 'search', status: 'done', query: 'mesh', params: {}, data: [{ position: 1, url: 'https://a.test/', title: 'A', snippet: 's', source: 'web', engine: 'google' }],
-  engine: 'google', rung: 'http', cached: false, batchId: null, creditsUsed: 1, attempts: [], next: null, error: '', createdAt: null, finishedAt: null, request_id: 'req_s', ...extra,
+  id, kind: 'search', status: 'done', query: 'mesh', params: {}, data: [{ position: 1, url: 'https://a.test/', title: 'A', snippet: 's', source: 'web' }],
+  cached: false, batchId: null, creditsUsed: 8, next: null, error: '', createdAt: null, finishedAt: null, request_id: 'req_s', ...extra,
 });
 
 test('webSearch answered at once sends camelCase fields and resolves the whole envelope', async () => {
@@ -768,7 +768,7 @@ test('agentRuns sends model, since and until on every page, a Date as its ISO st
 });
 
 test('webSearch news sends sources ["news"] and page; news hits carry publisher and age', async () => {
-  const news = searchDone('s11', { data: [{ position: 11, url: 'https://n.test/a', title: 'N', snippet: '', source: 'news', engine: 'google', publisher: 'The Paper', age: '20h' }] });
+  const news = searchDone('s11', { data: [{ position: 11, url: 'https://n.test/a', title: 'N', snippet: '', source: 'news', publisher: 'The Paper', age: '20h' }] });
   const { arc, calls } = client([{ body: news }, { body: searchDone('s12') }]);
   const out = await arc.webSearch('mesh', { news: true, page: 2 });
   assert.deepEqual(calls[0].body, { query: 'mesh', sources: ['news'], page: 2, timeout: 60 });
