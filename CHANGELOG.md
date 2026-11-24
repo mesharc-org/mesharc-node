@@ -6,6 +6,12 @@ All notable changes to this package are recorded here. The format follows
 
 ## Unreleased
 
+## 0.7.3 - 2026-11-24
+
+### Changed
+
+- **A search no longer says which engine read it, and costs one price.** Since 24 Nov 2026 the API answers a web search with its results alone -- `position`, `url`, `title`, `snippet`, `source`, and a news result's `publisher` and `age` -- at 8 credits whichever engine answered (8 for Google's and 4 for DuckDuckGo's or Bing's until then). `WebSearchHit.engine`, `WebSearchResult.engine`, `rung` and `attempts`, `SearchSummary.engine` and `rung`, `LimitNotice.engine`, and the `SearchAttempt` and `EngineLimit` types are optional and deprecated, kept so code that names them still compiles; the API no longer sends them. `WebSearchResult.tookMs` is typed.
+
 ## 0.7.2 - 2026-11-13
 
 ### Added

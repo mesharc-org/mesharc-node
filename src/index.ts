@@ -10,7 +10,7 @@
  * https://mesharc.dev/docs/api applies to every return value.
  */
 
-export const VERSION = '0.7.2';
+export const VERSION = '0.7.3';
 
 const DEFAULT_BASE = 'https://api.mesharc.dev';
 const DEFAULT_TIMEOUT_MS = 150_000;
@@ -711,10 +711,11 @@ export interface WebSearchHit extends Json {
   snippet: string;
   /** The kind of result: `web` for an organic result, `news` for a news one. */
   source: string;
-  engine: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  engine?: string;
   /** A news result: who published it. */
   publisher?: string | null;
-  /** A news result: how old it is, as the engine put it ("20h"). */
+  /** A news result: how old it is, as its source put it ("20h"). */
   age?: string | null;
   /**
    * The result's page when the search scraped it; `{ url, status: 'pending' | 'expired' }` until it
@@ -744,7 +745,7 @@ export interface PageLimit extends Json {
 
 /**
  * One reason a limit kept pages from an answer: a crawl, scrape, batch or search answer carries a list of
- * these as `notices`, empty when nothing was held back. A search's notice also names the `engine`.
+ * these as `notices`, empty when nothing was held back.
  */
 export interface LimitNotice extends Json {
   code: 'plan_limited';
@@ -757,6 +758,7 @@ export interface LimitNotice extends Json {
   unlockedBy: string | null;
   upgradeUrl: string;
   message: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
   engine?: string;
 }
 
@@ -767,7 +769,7 @@ export interface StealthAllowance extends Json {
   left: number;
 }
 
-/** What kept one engine from answering a search: the tier it needed and why. The words are in the search's `notices`. */
+/** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
 export interface EngineLimit extends Json {
   needs: string;
   reason: LimitReason;
@@ -775,7 +777,7 @@ export interface EngineLimit extends Json {
   ceiling?: string;
 }
 
-/** One engine's try at the results page. */
+/** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
 export interface SearchAttempt extends Json {
   engine?: string | null;
   ok?: boolean | null;
@@ -798,12 +800,12 @@ export interface WebSearchResult extends Json {
   id: string;
   kind: 'search';
   /**
-   * queued, running (also while scraped pages land), done, blocked (no engine answered; see
-   * `outcome`) or error.
+   * queued, running (also while scraped pages land), done, blocked (no results to be had, or the credits
+   * stopped it; see `outcome`) or error.
    */
   status: string;
   /**
-   * With status `blocked`: `'no_results'` when every engine refused or had nothing (free), `null`
+   * With status `blocked`: `'no_results'` when no results could be read (free), `null`
    * when the search did not run because the credits left could not pay for a results page. Absent
    * from an API before 12 Nov 2026.
    */
@@ -811,13 +813,19 @@ export interface WebSearchResult extends Json {
   query: string;
   params: Json;
   data: WebSearchHit[];
-  engine: string;
-  rung: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  engine?: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  rung?: string;
   cached: boolean;
   batchId: string | null;
+  /** What the search cost: 8 credits, plus any scraped pages. */
   creditsUsed: number;
-  attempts: SearchAttempt[];
-  /** What a limit kept from this search, e.g. Google needed the stealth tier and Bing answered; empty or absent when nothing was. */
+  /** How long the search took, in milliseconds; null while it runs and for an answer from the cache. */
+  tookMs?: number | null;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  attempts?: SearchAttempt[];
+  /** What a limit kept from this search, and the plan that lifts it; empty or absent when nothing was. */
   notices?: LimitNotice[];
   /** The URL to poll while the search runs; null once it is finished. */
   next: string | null;
@@ -836,8 +844,10 @@ export interface SearchSummary extends Json {
   status: string;
   /** As on `WebSearchResult`: why a `blocked` search found nothing. */
   outcome?: 'no_results' | null;
-  engine: string;
-  rung: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  engine?: string;
+  /** @deprecated No longer sent: since 24 Nov 2026 the API does not say which engine read a search. Kept so older code compiles. */
+  rung?: string;
   cached: boolean;
   resultCount: number;
   /** The first three results' hosts. */
